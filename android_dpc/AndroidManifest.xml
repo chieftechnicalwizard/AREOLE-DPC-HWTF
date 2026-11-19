@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AndroidManifest.xml — Device Policy Controller (DPC) Component Contract
+  =======================================================================
+  Android's Setup Wizard (ManagedProvisioning) inspects every APK downloaded
+  during 6-tap QR provisioning. Three manifest declarations are mandatory for
+  Android 10-16+ enrollment to succeed cleanly:
+
+    1. BIND_DEVICE_ADMIN-protected GetProvisioningModeActivity handling
+       android.app.action.GET_PROVISIONING_MODE (Android 10+ mode handshake)
+    2. BIND_DEVICE_ADMIN-protected PolicyComplianceActivity handling
+       android.app.action.ADMIN_POLICY_COMPLIANCE (finalizes enrollment UX)
+    3. DeviceAdminReceiver subclass declaring android.app.device_admin metadata
+       and handling DEVICE_ADMIN_ENABLED + PROFILE_PROVISIONING_COMPLETE
+
+  Security note: No tracking SDKs, no analytics, and no proprietary cloud URLs.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.areole.dpc"
+    android:versionCode="1"
+    android:versionName="1.0.0">
+
+    <!-- minSdk 26 covers Android 8.0+; targetSdk 35 aligns with Android 15/16 -->
+    <uses-sdk
+        android:minSdkVersion="26"
+        android:targetSdkVersion="35" />
+
+    <!-- Network access is used strictly to talk to YOUR self-hosted server -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Resyncs zero-restriction state and polls queued web UI commands after reboot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Lets the self-hosted web console display your installed package inventory -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+    <!-- Note: Self-hosted LAN URLs may use plain HTTP after HTTPS QR handoff -->
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true">
+
+        <!-- Local launcher console for direct on-device control & clean deprovisioning -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Step 1 of Android 10-16 Setup Wizard handshake: pick Device Owner or Work Profile -->
+        <activity
+            android:name=".GetProvisioningModeActivity"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <intent-filter>
+                <action android:name="android.app.action.GET_PROVISIONING_MODE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Step 2 of Setup Wizard handshake: apply debloat/defaults & return RESULT_OK -->
+        <activity
+            android:name=".PolicyComplianceActivity"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <intent-filter>
+                <action android:name="android.app.action.ADMIN_POLICY_COMPLIANCE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Core DeviceAdminReceiver activated immediately after profile/owner creation -->
+        <receiver
+            android:name=".AreoleDeviceAdminReceiver"
+            android:description="@string/admin_desc"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <action android:name="android.app.action.PROFILE_PROVISIONING_COMPLETE" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

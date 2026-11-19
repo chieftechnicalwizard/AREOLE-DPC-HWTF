@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<!--
+  AreoleDPC Self-Hosted Web Console
+  =================================
+  Pure vanilla HTML + CSS + JavaScript — zero frameworks, zero external CDNs,
+  zero telemetry. Everything talks directly to your local server.py instance.
+
+  How it teaches & runs Android provisioning:
+    1. QR Code Enrollment Tab: collects your chosen mode (Device Owner vs Work
+       Profile), server URL (HTTPS tunnel for Android 14-16+ 6-tap QR), Wi-Fi
+       auto-join details, and bloat/notification preferences, then asks
+       POST /api/qr to build AOSP PROVISIONING_* JSON + render an inline SVG QR.
+    2. Enrolled Devices Tab: lists devices checking into /api/device/checkin,
+       opens a live App Inventory drawer to hide/restore any app, and triggers
+       non-destructive unenrollment (clearDeviceOwnerApp()).
+    3. USB / Wireless ADB Tab: lets you pair Android 11-16 Wireless Debugging or
+       run direct USB ADB debloating / optional Thingino APK installs.
+-->
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AREOLE-DPC-HWTF — Self-Hosted Android QR Provisioner &amp; Debloater</title>
+  <style>
+    :root { --bg:#0b1220; --card:#131c2e; --border:#24324d; --text:#e2e8f0; --muted:#94a3b8; --blue:#3b82f6; --teal:#14b8a6; --amber:#f59e0b; --red:#ef4444; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--text); }
+    header { display:flex; align-items:center; justify-content:space-between; padding:14px 24px; background:#0f172a; border-bottom:1px solid var(--border); }
+    header h1 { margin:0; font-size:18px; display:flex; align-items:center; gap:10px; }
+    .badge { font-size:12px; padding:3px 9px; border-radius:999px; background:#1e293b; color:var(--teal); border:1px solid #0f766e; }
+    nav { display:flex; gap:8px; padding:12px 24px; border-bottom:1px solid var(--border); background:#0f172a; }
+    nav button { background:transparent; color:var(--muted); border:1px solid transparent; padding:8px 14px; border-radius:8px; cursor:pointer; font-weight:600; }
+    nav button.active { background:#1e293b; color:#fff; border-color:var(--border); }
+    main { max-width:1280px; margin:20px auto; padding:0 20px 40px; }
+    .grid { display:grid; grid-template-columns: 1.35fr 1fr; gap:20px; }
+    @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:18px; }
+    .card h2 { margin:0 0 14px; font-size:16px; color:#f8fafc; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; }
+    label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+    input, select, textarea { width:100%; background:#0b1220; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:9px 11px; font-size:13px; }
+    textarea { font-family: ui-monospace, monospace; min-height:150px; }
+    .btn { background:var(--blue); color:#fff; border:0; border-radius:8px; padding:9px 14px; font-weight:600; cursor:pointer; font-size:13px; }
+    .btn.teal { background:var(--teal); color:#042f2e; }
+    .btn.red { background:var(--red); }
+    .btn.ghost { background:#1e293b; border:1px solid var(--border); color:#e2e8f0; }
+    .btn-row { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+    .qr-box { background:#fff; padding:16px; border-radius:12px; display:inline-block; margin:10px auto; }
+    .qr-box svg { width:270px; height:270px; display:block; }
+    .step { display:flex; gap:12px; padding:10px 0; border-bottom:1px solid #1e293b; font-size:13px; }
+    .step b { color:#fff; }
+    .note { font-size:12px; color:#cbd5e1; background:#172554; border:1px solid #1d4ed8; padding:10px 12px; border-radius:8px; margin-top:10px; line-height:1.45; }
+    .warn { font-size:12px; color:#fde68a; background:#451a03; border:1px solid #b45309; padding:10px 12px; border-radius:8px; margin-top:10px; line-height:1.45; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--border); }
+    th { color:var(--muted); font-size:11px; text-transform:uppercase; }
+    .hidden { display:none; }
+    pre { background:#0b1220; padding:12px; border-radius:8px; border:1px solid var(--border); overflow:auto; font-size:12px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>AREOLE-DPC-HWTF <span class="badge">Self-Hosted 6-Tap Android Owner &amp; Debloater</span></h1>
+  <div style="font-size:12px;color:#94a3b8" id="apkBadge">Loading APK metadata...</div>
+</header>
+<nav>
+  <button class="active" onclick="showTab('enroll', this)">1. 6-Tap QR Enrollment</button>
+  <button onclick="showTab('devices', this)">2. Enrolled Devices &amp; App Drawer</button>
+  <button onclick="showTab('adb', this)">3. USB / Wireless ADB Control</button>
+</nav>
+<main>
+  <section id="tab-enroll">
+    <div class="grid">
+      <div class="card">
+        <h2>QR Code Enrollment Template</h2>
+        <div class="row">
+          <div>
+            <label>Template Type</label>
+            <select id="template" onchange="refreshQR()">
+              <option value="android9_self">Android 9.0–16+ (Signature Checksum — Recommended)</option>
+              <option value="legacy_6_9">Android 6.0–9.0 (APK File Checksum)</option>
+              <option value="manageengine_ref">AOSP / Managed-App Reference Schema</option>
+            </select>
+          </div>
+          <div>
+            <label>Provisioning Mode</label>
+            <select id="preferred_mode" onchange="refreshQR()">
+              <option value="device_owner">First-Boot 6-Tap Device Owner (Self-Clear Without Wipe)</option>
+              <option value="work_profile">First-Boot COPE Work Profile</option>
+              <option value="personal_work_profile">Removable Personal Work Profile</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Server URL (Must Be HTTPS for Android 14–16+ 6-Tap QR)</label>
+            <select id="server_url" onchange="refreshQR()"></select>
+          </div>
+          <div>
+            <label>Profile Label / Owner Name</label>
+            <input id="username" value="Owner" oninput="refreshQR()" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Device PIN Hint (Optional Prompt Reminder)</label>
+            <input id="pin_hint" value="1111" oninput="refreshQR()" />
+          </div>
+          <div>
+            <label>Wi-Fi Security (Optional Auto-Join)</label>
+            <select id="wifi_security" onchange="refreshQR()">
+              <option value="WPA">WPA / WPA2 / WPA3</option>
+              <option value="NONE">Open</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Wi-Fi SSID (Optional — skips typing Wi-Fi during Welcome setup)</label>
+            <input id="wifi_ssid" placeholder="e.g. MyHomeWiFi" oninput="refreshQR()" />
+          </div>
+          <div>
+            <label>Wi-Fi Password</label>
+            <input id="wifi_password" type="password" placeholder="Optional Wi-Fi password" oninput="refreshQR()" />
+          </div>
+        </div>
+        <div class="btn-row">
+          <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);">
+            <input type="checkbox" id="strip_bloatware" checked style="width:auto" onchange="refreshQR()" /> Strip OEM &amp; Carrier Bloatware
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);">
+            <input type="checkbox" id="notifications_off" checked style="width:auto" onchange="refreshQR()" /> Notifications Off by Default
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);">
+            <input type="checkbox" id="install_thingino" style="width:auto" onchange="refreshQR()" /> Optional: Install Thingino App (v0.6.0)
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);">
+            <input type="checkbox" id="skip_encryption" checked style="width:auto" onchange="refreshQR()" /> Skip Encryption Prompt
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);">
+            <input type="checkbox" id="leave_system_apps" checked style="width:auto" onchange="refreshQR()" /> Keep Core System Apps (Dialer / Camera / Drive / YT / Photos)
+          </label>
+        </div>
+
+        <div class="note">
+          <b>Why Device Owner + Non-Destructive Clear?</b><br/>
+          &bull; Choosing <b>First-Boot 6-Tap Device Owner</b> gives <code>AreoleDPC</code> system-wide ability to hide carrier/OEM junk via <code>setApplicationHidden()</code> and silence default spam notifications, while immediately clearing all <code>UserManager</code> restrictions so you stay in full control.<br/>
+          &bull; Unlike 6-tap COPE Work Profiles (where Android disables Settings profile removal), Device Owner lets you tap <b>Deprovision &amp; Remove Controller</b> later to call <code>clearDeviceOwnerApp()</code> cleanly with zero factory reset or data loss.
+        </div>
+
+        <label style="margin-top:14px;">Generated Android Provisioning QR JSON</label>
+        <textarea id="payload_json" readonly></textarea>
+        <div class="btn-row">
+          <button class="btn" onclick="copyJson()">Copy QR JSON</button>
+          <a class="btn ghost" href="/apk/areole-dpc.apk" style="text-decoration:none;">Download areole-dpc.apk</a>
+          <button class="btn teal" onclick="refreshQR()">Regenerate Token &amp; QR</button>
+        </div>
+      </div>
+
+      <div class="card" style="text-align:center;">
+        <h2>Scan on 6-Tap Welcome Screen</h2>
+        <div class="qr-box" id="qrSvg">Loading QR...</div>
+        <div style="text-align:left;">
+          <div class="step"><div>1.</div><div>Power on a factory-reset phone, stay on the <b>Welcome / Hi there</b> screen, and tap empty space <b>6 times</b> until the QR scanner launches.</div></div>
+          <div class="step"><div>2.</div><div>Point the phone camera at this QR code. It joins Wi-Fi (if filled), fetches <code>areole-dpc.apk</code> from your HTTPS URL, and checks the signing certificate hash.</div></div>
+          <div class="step"><div>3.</div><div>For a phone that is already set up without wiping, open <code id="setupLink"></code> on the phone browser, install the APK, and tap <b>Create Unrestricted Work Profile</b>.</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-devices" class="hidden">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h2 style="margin:0;">Enrolled / Staged Devices</h2>
+        <button class="btn ghost" onclick="loadStatus()">Refresh</button>
+      </div>
+      <table>
+        <thead><tr><th>Device ID</th><th>Model &amp; OS</th><th>Label</th><th>Role</th><th>Hidden Bloat</th><th>Last Seen</th><th>Actions</th></tr></thead>
+        <tbody id="devicesBody"></tbody>
+      </table>
+    </div>
+    <div class="card hidden" id="appsDrawer">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h2 style="margin:0;" id="appsDrawerTitle">Device App Inventory</h2>
+        <div class="btn-row" style="margin:0;">
+          <input id="appFilter" placeholder="Filter apps..." style="width:190px;padding:6px 10px;" oninput="renderAppsDrawer()" />
+          <button class="btn red" onclick="applySelectedApps('HIDE_PACKAGES')">Hide Selected Bloat</button>
+          <button class="btn teal" onclick="applySelectedApps('UNHIDE_PACKAGES')">Restore Selected</button>
+        </div>
+      </div>
+      <div style="max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:8px;">
+        <table>
+          <thead><tr><th><input type="checkbox" style="width:auto" onchange="toggleAllApps(this.checked)" /></th><th>App Name</th><th>Package</th><th>Type</th><th>State</th></tr></thead>
+          <tbody id="appsDrawerBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-adb" class="hidden">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h2 style="margin:0;">USB / Wireless ADB Device Control</h2>
+        <button class="btn ghost" onclick="loadAdb()">Scan ADB</button>
+      </div>
+      <div class="row">
+        <div>
+          <label>Wireless ADB Pair Target (PhoneIP:PairingPort)</label>
+          <input id="adb_pair_target" placeholder="e.g. 192.0.2.50:37123" />
+        </div>
+        <div>
+          <label>6-Digit Pairing Code</label>
+          <div style="display:flex;gap:8px;">
+            <input id="adb_pair_code" placeholder="123456" />
+            <button class="btn" onclick="adbPair()">Pair</button>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Wireless ADB Connect Target (PhoneIP:ConnectPort)</label>
+          <div style="display:flex;gap:8px;">
+            <input id="adb_connect_target" placeholder="e.g. 192.0.2.50:44839" />
+            <button class="btn teal" onclick="adbConnect()">Connect</button>
+          </div>
+        </div>
+        <div></div>
+      </div>
+      <div id="adbStatus">Click Scan ADB...</div>
+      <div class="btn-row" style="margin-top:14px;">
+        <button class="btn" onclick="adbAction('enable_debug_and_name')">Enable Dev/ADB &amp; Apply Label</button>
+        <button class="btn teal" onclick="adbAction('debloat')">Strip OEM &amp; Carrier Bloatware</button>
+        <button class="btn" onclick="adbAction('mute_notifications')">Mute Non-Core Notifications</button>
+        <button class="btn" onclick="adbAction('install_dpc')">Install AreoleDPC APK</button>
+        <button class="btn" style="background:#0284c7" onclick="adbAction('install_thingino')">Install Optional Thingino App (v0.6.0)</button>
+        <button class="btn teal" onclick="adbAction('create_work_profile')">Create Removable Work Profile (ADB)</button>
+        <button class="btn red" onclick="adbAction('remove_work_profile')">Remove Work Profile (Keep Personal)</button>
+      </div>
+      <pre id="adbLogs" style="margin-top:14px;">ADB output will appear here...</pre>
+    </div>
+  </section>
+</main>
+
+<script>
+let statusData = null;
+
+function showTab(name, btn) {
+  document.querySelectorAll("section").forEach(s => s.classList.add("hidden"));
+  document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
+  document.getElementById("tab-" + name).classList.remove("hidden");
+  btn.classList.add("active");
+  if (name === "devices") loadStatus();
+  if (name === "adb") loadAdb();
+}
+
+async function loadStatus() {
+  const r = await fetch("/api/status");
+  statusData = await r.json();
+  const sel = document.getElementById("server_url");
+  const prev = sel.value;
+  sel.innerHTML = "";
+  const ips = statusData.lan_ips || [];
+  if (!ips.length) ips.push({iface:"lo", ip:"127.0.0.1"});
+
+  // Prioritize valid HTTPS tunnel when available because Android 14-16+ Setup Wizard rejects plain HTTP.
+  if (statusData.https_tunnel_url) {
+    const o = document.createElement("option");
+    o.value = statusData.https_tunnel_url;
+    o.textContent = `${statusData.https_tunnel_url} (HTTPS Tunnel — 6-Tap QR)`;
+    sel.appendChild(o);
+  }
+  ips.forEach(x => {
+    const u = `http://${x.ip}:${statusData.port}`;
+    const o = document.createElement("option");
+    o.value = u;
+    o.textContent = `${u} (${x.iface})`;
+    sel.appendChild(o);
+  });
+  if (prev && Array.from(sel.options).some(o => o.value === prev)) sel.value = prev;
+  document.getElementById("setupLink").textContent = sel.value + "/setup";
+  const tlsTag = statusData.https_tunnel_url ? ` | HTTPS: ${statusData.https_tunnel_url}` : " | Start with --tunnel for HTTPS 6-Tap QR";
+  document.getElementById("apkBadge").textContent =
+    (statusData.apk.apk_exists
+      ? `APK ready (${(statusData.apk.apk_bytes/1024).toFixed(1)} KB) | Cert: ${statusData.apk.signature_checksum.slice(0,14)}...`
+      : "APK missing — run ./build_dpc.sh") + tlsTag;
+
+  const tb = document.getElementById("devicesBody");
+  tb.innerHTML = "";
+  if (!(statusData.devices || []).length) {
+    tb.innerHTML = "<tr><td colspan='7' style='color:#94a3b8'>No devices checked in yet. Scan QR or install /setup APK.</td></tr>";
+  } else {
+    statusData.devices.forEach(d => {
+      const tr = document.createElement("tr");
+      const age = Math.max(0, Math.round(Date.now()/1000 - d.last_seen));
+      tr.innerHTML = `
+        <td><code>${d.device_id}</code></td>
+        <td>${d.model}<br/><span style="color:#94a3b8;font-size:11px">Android ${d.android_version}</span></td>
+        <td>${d.username}</td>
+        <td><b>${d.role}</b></td>
+        <td>${d.hidden_count} pkgs</td>
+        <td>${age}s ago</td>
+        <td>
+          <div class="btn-row" style="margin:0;">
+            <button class="btn ghost" onclick="openAppsDrawer('${d.device_id}')">Apps (${(d.installed_apps||[]).length})</button>
+            <button class="btn ghost" onclick="sendCmd('${d.device_id}','STRIP_BLOATWARE')">Debloat</button>
+            <button class="btn ghost" onclick="sendCmd('${d.device_id}','MUTE_NOTIFICATIONS')">Mute Notifs</button>
+            <button class="btn ghost" onclick="sendCmd('${d.device_id}','INSTALL_THINGINO')">Install Thingino</button>
+            <button class="btn red" onclick="sendCmd('${d.device_id}','DEPROVISION_KEEP_PERSONAL')">Deprovision (Keep Data)</button>
+            <button class="btn ghost" onclick="delDev('${d.device_id}')">Remove Row</button>
+          </div>
+        </td>`;
+      tb.appendChild(tr);
+    });
+  }
+  await refreshQR();
+}
+
+let drawerDeviceId = null;
+function openAppsDrawer(devId) {
+  drawerDeviceId = devId;
+  document.getElementById("appsDrawer").classList.remove("hidden");
+  document.getElementById("appsDrawerTitle").textContent = `App Inventory — ${devId}`;
+  renderAppsDrawer();
+}
+
+function renderAppsDrawer() {
+  if (!statusData || !drawerDeviceId) return;
+  const dev = (statusData.devices || []).find(x => x.device_id === drawerDeviceId);
+  const q = (document.getElementById("appFilter").value || "").toLowerCase();
+  const body = document.getElementById("appsDrawerBody");
+  body.innerHTML = "";
+  const apps = (dev && dev.installed_apps ? dev.installed_apps : []).filter(a =>
+    !q || (a.label || "").toLowerCase().includes(q) || (a.pkg || "").toLowerCase().includes(q)
+  );
+  if (!apps.length) {
+    body.innerHTML = "<tr><td colspan='5' style='color:#94a3b8'>No app inventory reported yet. Open AreoleDPC on the phone to sync.</td></tr>";
+    return;
+  }
+  apps.sort((a, b) => (a.hidden === b.hidden ? (a.label || a.pkg).localeCompare(b.label || b.pkg) : (a.hidden ? 1 : -1)));
+  apps.forEach(a => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input type="checkbox" class="appChk" value="${a.pkg}" style="width:auto" /></td>
+      <td>${a.label || ""}</td>
+      <td><code>${a.pkg}</code></td>
+      <td>${a.system ? "System" : "User"}${a.launcher ? " · Launcher" : ""}</td>
+      <td>${a.hidden ? '<span style="color:#f59e0b">Hidden</span>' : '<span style="color:#14b8a6">Visible</span>'}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+function toggleAllApps(checked) {
+  document.querySelectorAll(".appChk").forEach(c => { c.checked = checked; });
+}
+
+async function applySelectedApps(action) {
+  if (!drawerDeviceId) return;
+  const pkgs = Array.from(document.querySelectorAll(".appChk:checked")).map(c => c.value);
+  if (!pkgs.length) return alert("Select one or more apps first.");
+  await fetch("/api/device/command", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({device_id: drawerDeviceId, action, payload: {packages: pkgs}})
+  });
+  alert(`Queued ${action} for ${pkgs.length} packages on ${drawerDeviceId}.`);
+}
+
+async function refreshQR() {
+  const srv = document.getElementById("server_url").value;
+  document.getElementById("setupLink").textContent = srv + "/setup";
+  const body = {
+    template: document.getElementById("template").value,
+    preferred_mode: document.getElementById("preferred_mode").value,
+    server_url: srv,
+    username: document.getElementById("username").value,
+    pin_hint: document.getElementById("pin_hint").value,
+    wifi_ssid: document.getElementById("wifi_ssid").value,
+    wifi_password: document.getElementById("wifi_password").value,
+    wifi_security: document.getElementById("wifi_security").value,
+    strip_bloatware: document.getElementById("strip_bloatware").checked,
+    notifications_off: document.getElementById("notifications_off").checked,
+    install_thingino: document.getElementById("install_thingino").checked,
+    skip_encryption: document.getElementById("skip_encryption").checked,
+    leave_system_apps: document.getElementById("leave_system_apps").checked,
+  };
+  const r = await fetch("/api/qr", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+  const j = await r.json();
+  document.getElementById("payload_json").value = JSON.stringify(j.payload, null, 2);
+  document.getElementById("qrSvg").innerHTML = j.svg || "QR generation failed";
+}
+
+async function sendCmd(device_id, action) {
+  await fetch("/api/device/command", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({device_id, action})
+  });
+  alert(`Queued ${action} for ${device_id}. Device executes on next poll (~15s).`);
+}
+
+async function delDev(device_id) {
+  await fetch("/api/device/delete", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({device_id})
+  });
+  loadStatus();
+}
+
+async function loadAdb() {
+  const r = await fetch("/api/adb/status");
+  const j = await r.json();
+  const el = document.getElementById("adbStatus");
+  if (!j.devices || !j.devices.length) {
+    el.innerHTML = `<div class="warn">No ADB device detected yet (ADB binary: <code>${j.adb_path || 'missing'}</code>). Plug in USB with Debugging enabled or pair Wireless Debugging above.</div>`;
+    return;
+  }
+  el.innerHTML = j.devices.map(d => `
+    <div class="note">
+      <b>${d.serial}</b> (${d.state}) — <b>${d.model}</b> | Android ${d.android}<br/>
+      Users: <code>${(d.users||[]).join(" | ")}</code><br/>
+      Preset bloatware active on User 0: <code>${(d.bloat_present||[]).length} packages</code>
+    </div>`).join("");
+}
+
+async function adbPair() {
+  const r = await fetch("/api/adb/action", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({
+      action: "adb_pair",
+      pair_target: document.getElementById("adb_pair_target").value,
+      pair_code: document.getElementById("adb_pair_code").value
+    })
+  });
+  const j = await r.json();
+  document.getElementById("adbLogs").textContent = (j.logs || []).join("\n");
+}
+
+async function adbConnect() {
+  const r = await fetch("/api/adb/action", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({
+      action: "adb_connect",
+      connect_target: document.getElementById("adb_connect_target").value
+    })
+  });
+  const j = await r.json();
+  document.getElementById("adbLogs").textContent = (j.logs || []).join("\n");
+  loadAdb();
+}
+
+async function adbAction(action) {
+  const r = await fetch("/api/adb/action", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({action, username: document.getElementById("username").value || "Owner"})
+  });
+  const j = await r.json();
+  document.getElementById("adbLogs").textContent = (j.logs || []).join("\n");
+  loadAdb();
+}
+
+function copyJson() {
+  const el = document.getElementById("payload_json");
+  el.select();
+  navigator.clipboard.writeText(el.value);
+}
+
+loadStatus();
+</script>
+</body>
+</html>

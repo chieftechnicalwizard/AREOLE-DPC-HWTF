@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  device_admin.xml — Declares standard Android DeviceAdminReceiver capabilities.
+  AreoleDPC never enforces restrictive lockouts on you: we clear UserManager
+  restrictions by default so the phone stays completely yours.
+-->
+<device-admin>
+    <uses-policies>
+        <limit-password />
+        <watch-login />
+        <reset-password />
+        <force-lock />
+        <wipe-data />
+        <expire-password />
+        <encrypted-storage />
+        <disable-camera />
+    </uses-policies>
+</device-admin>

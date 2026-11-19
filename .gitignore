@@ -1,0 +1,23 @@
+# Build & signing artifacts (never commit your private signing keys!)
+keystore/
+*.jks
+*.keystore
+*.pk8
+*.pem
+
+# Compiled APKs & third-party app downloads
+static/*.apk
+static/*.idsig
+*.idsig
+static/apps/
+android_dpc/build/
+
+# Runtime state & databases
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+__pycache__/
+*.pyc
+.env
