@@ -1,29 +1,3 @@
-```text
-         .    *      .          \  |  /          .       *        .
-      *            .         '-- (O) --'              .        *
-              .-.               /  |  \       .---.               .
-             /|*|\                           /|v|v|\     .-.
-      .-.   \| | |/   .-.          .-.      *| |*| |*   /|v|\
-     /|*|\   | | |   /|*|\        /|v|\      | |v| |   *| |*|*
-    \| | |/ -|*|*|- \| | |/      *| | |*    *| |*| |*   | | |
-     | | |   | | |   | | |   [QR] | |v|      | |v| |   *| |v|*
-    -|*|*|- \| | |/ -|*|*|-      *| | |*    *| |*| |*   | | |  .-.
- .-. | | |   | | |   | | |   .-.  | |v|  .-. | |v| |   *| |*|*/|v|\
-/|*|\| | |  \| | |/  | | |  /|v|\*| | |*/|v|\| |*| |    | | |*| | |*
-| | |*|*|*|- | | |  -|*|*|-*| | | | | |*| | |*| |v|*   *| | | | |v|
-|_|_||_|_|   |_|_|   |_|_|  |_|_|_|_|_||_|_|_|_|_|_|    |_|_|_|_|_|
- ..:o::::..::^::::..:::o::..::::..:::^:::..::::o:::..:::^:::..::o..
- ~ ~  AREOLE-DPC-HWTF :: Trichocereus bridgesii & pachanoi (SP) ~ ~
-```
-
-### ANSI Art *Trichocereus* Scene (`banner.ans`)
-
-Every run of `./setup.sh` or `python3 server.py` greets your terminal with the 256-color **ANSI art *Trichocereus bridgesii* & *pachanoi* (San Pedro) basal stand + golden areole spines + `[QR]` beacon** stored in [`banner.ans`](banner.ans). Preview it anytime directly in your shell:
-
-```bash
-cat banner.ans
-```
-
 ```ansi
          .    *      .          \  |  /          .       *        .
       *            .         '-- (O) --'              .        *
@@ -41,6 +15,8 @@ cat banner.ans
  ..:o::::..::^::::..:::o::..::::..:::^:::..::::o:::..:::^:::..::o..
  ~ ~  AREOLE-DPC-HWTF :: Trichocereus bridgesii & pachanoi (SP) ~ ~
 ```
+
+*(Preview the full 256-color terminal ANSI scene anytime with `cat banner.ans`.)*
 
 ---
 
