@@ -75,9 +75,24 @@ Follow these exact steps and explain what each command does as we go:
 ## Quick Start (Self-Hosting in 3 Minutes)
 
 ### Prerequisites
-- Linux host (Debian, Ubuntu, Arch/Omarchy, Fedora, etc.) with **Java JDK 17+** (`javac`/`keytool`), **Python 3.10+**, **`unzip`**, **`curl`**, and **`qrencode`** (optional, for sharp SVG QR codes in the browser).
-- On Debian/Ubuntu, `./setup.sh` installs missing dependencies automatically via `sudo apt-get`.
+- Linux host (**Debian / Ubuntu / Mint**, **Arch / Omarchy / Manjaro**, **Fedora / RHEL / Rocky / Alma**, **openSUSE**, **Alpine**, **Void**, or **NixOS**) with **Java JDK 17+** (`javac`/`keytool`), **Python 3.10+**, **`unzip`**, **`zip`**, **`curl`**, and **`qrencode`** (optional, for sharp SVG QR codes in the browser).
+- `./setup.sh` auto-detects `apt-get`, `pacman`, `dnf`, `zypper`, `apk`, and `xbps-install` to install missing dependencies automatically (or pass `--skip-deps` if you manage tools yourself).
 - An Android phone (**Android 9–16+** tested; bloat preset tuned specifically around Motorola retail/carrier builds such as Moto G Power 2026 while safe on any Android device).
+
+<details>
+<summary>Manual per-distribution dependency install commands (optional)</summary>
+
+| Distribution | Package Manager Command |
+| :--- | :--- |
+| **Debian / Ubuntu / Pop!_OS / Mint** | `sudo apt-get update && sudo apt-get install -y python3 qrencode curl unzip zip openjdk-21-jdk-headless` |
+| **Arch Linux / Omarchy / Manjaro** | `sudo pacman -Sy --needed python qrencode curl unzip zip jdk21-openjdk` |
+| **Fedora / RHEL / Rocky / Alma** | `sudo dnf install -y python3 qrencode curl unzip zip java-21-openjdk-devel` |
+| **openSUSE (Tumbleweed / Leap)** | `sudo zypper install python3 qrencode curl unzip zip java-21-openjdk-devel` |
+| **Alpine Linux** | `sudo apk add python3 libqrencode-tools curl unzip zip openjdk21-jdk bash` |
+| **Void Linux** | `sudo xbps-install -Sy python3 qrencode curl unzip zip openjdk21` |
+| **NixOS / Nix** | `nix-shell -p openjdk21 python3 qrencode curl unzip zip --run './setup.sh --skip-deps --with-tunnel --with-thingino'` |
+
+</details>
 
 ### 1. Clone & Bootstrap
 

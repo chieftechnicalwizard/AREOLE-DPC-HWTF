@@ -7,11 +7,17 @@
 # cloudflared (for trusted HTTPS 6-tap QR provisioning) and thingino-android.apk.
 #
 # Usage:
-#   ./setup.sh                  # Install SDK + build APK
+#   ./setup.sh                  # Install OS deps (if needed) + SDK + build APK
 #   ./setup.sh --with-tunnel    # Also install cloudflared quick-tunnel binary
 #   ./setup.sh --with-thingino  # Also download & SHA-256 verify Thingino v0.6.0
+#   ./setup.sh --skip-deps      # Skip distro package manager step (e.g. NixOS)
 #   ./setup.sh --start          # Start server.py after building
 #   ./setup.sh --start-tunnel   # Start server.py with managed HTTPS tunnel
+#
+# Supported distro package managers:
+#   apt-get (Debian/Ubuntu/Mint/Pop!_OS), pacman (Arch/Omarchy/Manjaro),
+#   dnf (Fedora/RHEL/Rocky/Alma), zypper (openSUSE), apk (Alpine),
+#   xbps-install (Void), plus clear guidance for Nix / immutable systems.
 # ==============================================================================
 set -euo pipefail
 
@@ -20,16 +26,18 @@ SDK_DIR="${ANDROID_HOME:-$HOME/.local/share/android-sdk}"
 LOCAL_BIN="$HOME/.local/bin"
 WITH_TUNNEL=0
 WITH_THINGINO=0
+SKIP_DEPS=0
 START_MODE=""
 
 for arg in "$@"; do
     case "$arg" in
         --with-tunnel) WITH_TUNNEL=1 ;;
         --with-thingino) WITH_THINGINO=1 ;;
+        --skip-deps) SKIP_DEPS=1 ;;
         --start) START_MODE="plain" ;;
         --start-tunnel) WITH_TUNNEL=1; START_MODE="tunnel" ;;
         -h|--help)
-            sed -n '2,17p' "$0"
+            sed -n '2,23p' "$0"
             exit 0
             ;;
         *)
@@ -42,33 +50,135 @@ done
 [ -f "$ROOT_DIR/banner.ans" ] && cat "$ROOT_DIR/banner.ans"
 echo ""
 
-# 1. OS packages (apt on Debian/Ubuntu; non-apt distros print required tools)
-if command -v apt-get >/dev/null 2>&1; then
-    MISSING=()
-    for cmd in python3 qrencode curl unzip zip javac; do
-        command -v "$cmd" >/dev/null 2>&1 || MISSING+=("$cmd")
-    done
-    if [ "${#MISSING[@]}" -gt 0 ]; then
-        echo "[*] Installing system packages (needs sudo): ${MISSING[*]}"
+run_priv() {
+    if [ "${EUID:-$(id -u)}" -eq 0 ]; then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        echo "Need root privileges (sudo not found) to run: $*" >&2
+        exit 1
+    fi
+}
+
+# 1. OS packages across major Linux distributions
+MISSING=()
+for cmd in python3 qrencode curl unzip zip javac keytool; do
+    command -v "$cmd" >/dev/null 2>&1 || MISSING+=("$cmd")
+done
+
+if [ "$SKIP_DEPS" -eq 0 ] && [ "${#MISSING[@]}" -gt 0 ]; then
+    echo "[*] Missing CLI tools: ${MISSING[*]}"
+
+    if command -v apt-get >/dev/null 2>&1; then
+        echo "[*] Detected Debian/Ubuntu/Mint (apt-get)..."
         PKGS=()
+        NEED_JDK=0
         for m in "${MISSING[@]}"; do
-            if [ "$m" = "javac" ]; then
+            case "$m" in
+                javac|keytool) NEED_JDK=1 ;;
+                *) PKGS+=("$m") ;;
+            esac
+        done
+        run_priv apt-get update -qq
+        if [ "$NEED_JDK" -eq 1 ]; then
+            if apt-cache show openjdk-21-jdk-headless >/dev/null 2>&1; then
                 PKGS+=("openjdk-21-jdk-headless")
             else
-                PKGS+=("$m")
+                PKGS+=("default-jdk-headless")
             fi
-        done
-        sudo apt-get update -qq
-        sudo apt-get install -y "${PKGS[@]}"
-    fi
-else
-    for cmd in python3 qrencode curl unzip zip javac keytool; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            echo "Missing required tool: $cmd. Please install it with your package manager." >&2
-            exit 1
         fi
-    done
+        run_priv apt-get install -y "${PKGS[@]}"
+
+    elif command -v pacman >/dev/null 2>&1; then
+        echo "[*] Detected Arch/Omarchy/Manjaro (pacman)..."
+        PKGS=()
+        NEED_JDK=0
+        for m in "${MISSING[@]}"; do
+            case "$m" in
+                python3) PKGS+=("python") ;;
+                javac|keytool) NEED_JDK=1 ;;
+                *) PKGS+=("$m") ;;
+            esac
+        done
+        if [ "$NEED_JDK" -eq 1 ]; then
+            if pacman -Si jdk21-openjdk >/dev/null 2>&1; then
+                PKGS+=("jdk21-openjdk")
+            else
+                PKGS+=("jdk-openjdk")
+            fi
+        fi
+        run_priv pacman -Sy --needed --noconfirm "${PKGS[@]}"
+
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "[*] Detected Fedora/RHEL/Rocky/Alma (dnf)..."
+        PKGS=()
+        NEED_JDK=0
+        for m in "${MISSING[@]}"; do
+            case "$m" in
+                javac|keytool) NEED_JDK=1 ;;
+                *) PKGS+=("$m") ;;
+            esac
+        done
+        [ "$NEED_JDK" -eq 1 ] && PKGS+=("java-21-openjdk-devel")
+        run_priv dnf install -y "${PKGS[@]}"
+
+    elif command -v zypper >/dev/null 2>&1; then
+        echo "[*] Detected openSUSE (zypper)..."
+        PKGS=()
+        NEED_JDK=0
+        for m in "${MISSING[@]}"; do
+            case "$m" in
+                javac|keytool) NEED_JDK=1 ;;
+                *) PKGS+=("$m") ;;
+            esac
+        done
+        [ "$NEED_JDK" -eq 1 ] && PKGS+=("java-21-openjdk-devel")
+        run_priv zypper --non-interactive install "${PKGS[@]}"
+
+    elif command -v apk >/dev/null 2>&1; then
+        echo "[*] Detected Alpine Linux (apk)..."
+        PKGS=()
+        NEED_JDK=0
+        for m in "${MISSING[@]}"; do
+            case "$m" in
+                qrencode) PKGS+=("libqrencode-tools") ;;
+                javac|keytool) NEED_JDK=1 ;;
+                *) PKGS+=("$m") ;;
+            esac
+        done
+        [ "$NEED_JDK" -eq 1 ] && PKGS+=("openjdk21-jdk")
+        run_priv apk add --no-cache "${PKGS[@]}"
+
+    elif command -v xbps-install >/dev/null 2>&1; then
+        echo "[*] Detected Void Linux (xbps-install)..."
+        PKGS=()
+        NEED_JDK=0
+        for m in "${MISSING[@]}"; do
+            case "$m" in
+                javac|keytool) NEED_JDK=1 ;;
+                *) PKGS+=("$m") ;;
+            esac
+        done
+        [ "$NEED_JDK" -eq 1 ] && PKGS+=("openjdk21")
+        run_priv xbps-install -Sy "${PKGS[@]}"
+
+    elif command -v nix-shell >/dev/null 2>&1; then
+        echo "NixOS detected. Enter a dev shell and re-run with --skip-deps:" >&2
+        echo "  nix-shell -p openjdk21 python3 qrencode curl unzip zip --run './setup.sh --skip-deps'" >&2
+        exit 1
+    else
+        echo "No supported package manager detected. Please install: python3 qrencode curl unzip zip openjdk-21 (JDK with javac/keytool)" >&2
+        exit 1
+    fi
 fi
+
+for cmd in python3 curl unzip zip javac keytool; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "Missing required tool after dependency check: $cmd" >&2
+        exit 1
+    fi
+done
 
 # 2. Android SDK 35 + build-tools + official platform-tools (adb)
 # Note: Google's standalone platform-tools adb (35+/37+) avoids the Wireless ADB
