@@ -76,7 +76,7 @@ provision and debloat an Android phone using 6-tap QR enrollment (or ADB fallbac
 Follow these exact steps and explain what each command does as we go:
 1. Check OS packages and ensure OpenJDK 17/21, python3, curl, unzip, and qrencode are installed.
 2. If not already inside the repo, clone:
-   git clone https://github.com/<OWNER>/AREOLE-DPC-HWTF.git && cd AREOLE-DPC-HWTF
+   git clone https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF.git && cd AREOLE-DPC-HWTF
 3. Run the bootstrap script with HTTPS tunnel and optional Thingino support:
    chmod +x setup.sh build_dpc.sh server.py
    ./setup.sh --with-tunnel --with-thingino
@@ -106,7 +106,7 @@ Follow these exact steps and explain what each command does as we go:
 ### 1. Clone & Bootstrap
 
 ```bash
-git clone https://github.com/<OWNER>/AREOLE-DPC-HWTF.git
+git clone https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF.git
 cd AREOLE-DPC-HWTF
 
 chmod +x setup.sh build_dpc.sh server.py
