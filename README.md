@@ -123,6 +123,48 @@ Open your browser locally to **`http://127.0.0.1:8780`**.
 
 ---
 
+## Option B: Containerized Self-Hosting (Docker / Podman)
+
+Prefer not to install Java JDK, `qrencode`, or the Android SDK onto your host OS? Run everything isolated inside one reproducible container using [`Dockerfile`](Dockerfile), [`docker-entrypoint.sh`](docker-entrypoint.sh), and [`compose.yaml`](compose.yaml).
+
+**Zero baked secrets:** No signing keys or APKs are built into the container image. On first boot, `docker-entrypoint.sh` generates your own private RSA-2048 keystore inside the persistent `/var/lib/areole` volume, signs `areole-dpc.apk`, and reuses that same identity across future restarts or container upgrades.
+
+### One-Command Compose Launch
+
+```bash
+git clone https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF.git
+cd AREOLE-DPC-HWTF
+
+docker compose up -d --build
+docker compose logs -f
+```
+
+Open **`http://127.0.0.1:8780`** in your browser. Look in `docker compose logs -f` for the live `https://*.trycloudflare.com` tunnel URL (or check the Server URL dropdown in the Web UI).
+
+### Optional Container Settings (`compose.yaml` or `docker run`)
+
+| Environment Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `AREOLE_MDM_PORT` | `8780` | Web console & APK server port |
+| `ENABLE_TUNNEL` | `1` | Start an ephemeral Cloudflare HTTPS Quick Tunnel (`0` = LAN / ADB only) |
+| `INSTALL_THINGINO` | `0` | Pre-download & SHA-256 verify Thingino `v0.6.0` on startup (`1` = enable) |
+| `REBUILD_APK` | `0` | Force recompiling `areole-dpc.apk` with the existing persistent keystore (`1` = rebuild) |
+
+**Direct `docker run` / `podman run` equivalent:**
+
+```bash
+docker build -t areole-dpc-hwtf .
+docker run -d --name areole-dpc \
+  --network host \
+  -e ENABLE_TUNNEL=1 \
+  -v areole_state:/var/lib/areole \
+  areole-dpc-hwtf
+```
+
+> **Networking note:** `network_mode: host` (default in [`compose.yaml`](compose.yaml)) lets `server.py` detect your real LAN IP addresses and reach Android **Wireless Debugging** on your subnet directly. On macOS or Windows Docker Desktop, comment out `network_mode: host` in `compose.yaml` and uncomment `ports: ["127.0.0.1:8780:8780"]` (6-tap QR via the `--tunnel` HTTPS URL and `/setup` work identically!).
+
+---
+
 ## Step-by-Step: 6-Tap QR Phone Enrollment
 
 1. **Choose Options in the Web UI (`http://127.0.0.1:8780`)**
@@ -150,8 +192,11 @@ Every source file is heavily commented so you can audit and learn the exact Andr
 | :--- | :--- |
 | [`server.py`](server.py) | Pure Python stdlib HTTP server, dynamic SDK/`apksigner`/`adb` resolver, URL-safe unpadded Base64 SHA-256 cert digest builder, `do_HEAD()` for Android 14–16 `ManagedProvisioning`, `cloudflared` HTTPS quick-tunnel runner with `403` admin isolation, SQLite command queue, and ADB controller. |
 | [`static/index.html`](static/index.html) | Self-contained 3-tab browser console: live QR JSON generator + SVG renderer, Enrolled Devices & App Inventory hide/restore drawer, and Wireless/USB ADB controls. |
-| [`build_dpc.sh`](build_dpc.sh) | Builds `areole-dpc.apk` from raw Java & XML without Gradle bloat: `aapt2 compile` -> `aapt2 link` -> `javac --release 8` -> `d8` DEX compiler -> `zip` + `zipalign` -> `apksigner` v1/v2/v3 APK signing with a local auto-generated PKCS12 keystore. |
-| [`setup.sh`](setup.sh) | Idempotent host bootstrapper that installs OS tools, official Google Android SDK `android-35` + `build-tools;35.0.0` + `platform-tools` 37.x, builds the APK, and optionally caches `cloudflared` and SHA-256-verified Thingino `v0.6.0`. |
+| [`build_dpc.sh`](build_dpc.sh) | Builds `areole-dpc.apk` from raw Java & XML without Gradle bloat: `aapt2 compile` -> `aapt2 link` -> `javac --release 11` -> `d8` DEX compiler -> `zip` + `zipalign` -> `apksigner` v1/v2/v3 APK signing with a local auto-generated PKCS12 keystore. |
+| [`setup.sh`](setup.sh) | Multi-distro host bootstrapper (`apt-get`, `pacman`, `dnf`, `zypper`, `apk`, `xbps-install`, `--skip-deps`) that installs OS tools, official Google Android SDK `android-35` + `build-tools;35.0.0` + `platform-tools` 37.x, builds the APK, and optionally caches `cloudflared` and SHA-256-verified Thingino `v0.6.0`. |
+| [`Dockerfile`](Dockerfile) | Multi-stage-clean Ubuntu 24.04 container packaging OpenJDK 21, Python 3, `qrencode`, `iproute2`, Android SDK 35 + `adb` 37+, and `cloudflared` under non-root UID `10001`. |
+| [`docker-entrypoint.sh`](docker-entrypoint.sh) | First-boot container initializer that prints `banner.ans`, generates a persistent keystore inside `/var/lib/areole`, compiles `areole-dpc.apk`, verifies optional Thingino, and `exec`s `server.py`. |
+| [`compose.yaml`](compose.yaml) | Ready-to-run Compose stack with `network_mode: host`, persistent `areole_state` volume, and documented bridged/USB options. |
 | [`android_dpc/AndroidManifest.xml`](android_dpc/AndroidManifest.xml) | Declares the required `BIND_DEVICE_ADMIN` activities (`GET_PROVISIONING_MODE`, `ADMIN_POLICY_COMPLIANCE`) and `DeviceAdminReceiver` (`PROFILE_PROVISIONING_COMPLETE`, `BOOT_COMPLETED`). |
 | [`GetProvisioningModeActivity.java`](android_dpc/src/com/areole/dpc/GetProvisioningModeActivity.java) | Step 1 of Setup Wizard handshake: reads `PROVISIONING_ADMIN_EXTRAS_BUNDLE` from the QR code, persists your server URL and flags, and selects Device Owner or Managed Profile mode. |
 | [`PolicyComplianceActivity.java`](android_dpc/src/com/areole/dpc/PolicyComplianceActivity.java) | Step 2 of Setup Wizard handshake: applies `clearUserRestriction()`, hides bloatware immediately, fires background server sync, and returns `Activity.RESULT_OK` so setup completes. |

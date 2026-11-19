@@ -1,0 +1,61 @@
+# ==============================================================================
+# compose.yaml — Local Container Stack for AREOLE-DPC-HWTF
+#
+# Quick Start:
+#   docker compose up -d --build
+#   docker compose logs -f
+#
+# Open http://127.0.0.1:8780 in your browser!
+#
+# Teaching Notes on Networking & Persistence:
+#   * `network_mode: host` (default below, ideal on Linux):
+#     - Lets server.py automatically list your host's real LAN IP addresses for
+#       local `/setup` links and Wireless ADB pairing (`adb pair <phone-ip>:port`).
+#     - Still safe with `ENABLE_TUNNEL=1`: any request entering through
+#       trycloudflare.com gets HTTP 403 on admin/QR/ADB endpoints!
+#   * Using Docker Desktop on macOS/Windows (where host networking differs)?
+#     Comment out `network_mode: host` and uncomment `ports: ["8780:8780"]`.
+#   * Persistence (`areole_state` named volume -> `/var/lib/areole`):
+#     Keeps your RSA-2048 signing keystore, SQLite device database, and signed
+#     areole-dpc.apk across container rebuilds without UID permission headaches.
+# ==============================================================================
+
+services:
+  areole-dpc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: areole-dpc-hwtf
+    restart: unless-stopped
+
+    # Linux host networking lets LAN discovery + Wireless ADB work seamlessly.
+    network_mode: host
+
+    # For macOS/Windows Docker Desktop (or bridged isolation), comment out
+    # `network_mode: host` above and uncomment the `ports` block below:
+    # ports:
+    #   - "127.0.0.1:8780:8780"
+
+    environment:
+      # Port for the local Web Console (http://127.0.0.1:8780)
+      AREOLE_MDM_PORT: "8780"
+      # Set to "1" to launch an ephemeral Cloudflare HTTPS Quick Tunnel for Android 14-16+ 6-tap QR.
+      # Set to "0" if you only want local LAN / USB / Wireless ADB usage.
+      ENABLE_TUNNEL: "1"
+      # Set to "1" to pre-download & SHA-256 verify optional Thingino v0.6.0 APK into the image volume.
+      INSTALL_THINGINO: "0"
+      # Set to "1" once if you edited Java/XML sources and want to recompile areole-dpc.apk.
+      REBUILD_APK: "0"
+
+    volumes:
+      # Stores keystore/ (.jks + .storepass), data/ (areole_mdm.db + areole-dpc.apk), and apps/
+      - areole_state:/var/lib/areole
+
+    # Optional: Uncomment below ONLY if you also want USB-cable ADB directly inside the container.
+    # privileged: true
+    # volumes:
+    #   - areole_state:/var/lib/areole
+    #   - /dev/bus/usb:/dev/bus/usb
+
+volumes:
+  areole_state:

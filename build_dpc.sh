@@ -30,12 +30,12 @@ BUILD_DIR="$ROOT_DIR/android_dpc/build"
 SRC_DIR="$ROOT_DIR/android_dpc/src"
 RES_DIR="$ROOT_DIR/android_dpc/res"
 MANIFEST="$ROOT_DIR/android_dpc/AndroidManifest.xml"
-KEYSTORE_DIR="$ROOT_DIR/keystore"
+KEYSTORE_DIR="${AREOLE_KEYSTORE_DIR:-$ROOT_DIR/keystore}"
 KEYSTORE="$KEYSTORE_DIR/areole-dpc.jks"
 PASS_FILE="$KEYSTORE_DIR/.storepass"
-APK_OUT="$ROOT_DIR/static/areole-dpc.apk"
+APK_OUT="${AREOLE_APK_PATH:-$ROOT_DIR/static/areole-dpc.apk}"
 
-mkdir -p "$BUILD_DIR/obj" "$BUILD_DIR/dex" "$BUILD_DIR/gen" "$KEYSTORE_DIR" "$ROOT_DIR/static"
+mkdir -p "$BUILD_DIR/obj" "$BUILD_DIR/dex" "$BUILD_DIR/gen" "$KEYSTORE_DIR" "$(dirname "$APK_OUT")"
 
 # Never hardcode passwords in public repositories:
 # Generate a local random 24-character keystore password once if not already present.

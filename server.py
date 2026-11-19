@@ -57,12 +57,12 @@ from typing import Any
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-APPS_DIR = STATIC_DIR / "apps"
-DATA_DIR = BASE_DIR / "data"
+APPS_DIR = Path(os.environ.get("AREOLE_APPS_DIR", str(STATIC_DIR / "apps")))
+DATA_DIR = Path(os.environ.get("AREOLE_DATA_DIR", str(BASE_DIR / "data")))
 DB_PATH = DATA_DIR / "areole_mdm.db"
 TUNNEL_URL_FILE = DATA_DIR / "tunnel_url.txt"
 BANNER_PATH = BASE_DIR / "banner.ans"
-APK_PATH = STATIC_DIR / "areole-dpc.apk"
+APK_PATH = Path(os.environ.get("AREOLE_APK_PATH", str(STATIC_DIR / "areole-dpc.apk")))
 
 ADMIN_COMPONENT = "com.areole.dpc/com.areole.dpc.AreoleDeviceAdminReceiver"
 

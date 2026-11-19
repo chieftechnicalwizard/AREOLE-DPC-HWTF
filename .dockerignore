@@ -1,0 +1,19 @@
+# Never copy host secrets, local builds, git history, or databases into the image.
+.git
+.gitignore
+keystore/
+*.jks
+*.keystore
+*.pk8
+*.pem
+data/
+*.db
+*.db-wal
+*.db-shm
+static/*.apk
+static/*.idsig
+static/apps/
+android_dpc/build/
+__pycache__/
+*.pyc
+.env
