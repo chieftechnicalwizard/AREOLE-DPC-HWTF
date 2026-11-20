@@ -22,6 +22,8 @@
 
 # AREOLE-DPC-HWTF
 
+<a href="https://www.shekinahshine.org/?donate=paypal"><img src="docs/badges/paypal-donate-pill.svg" alt="Donate via PayPal" height="22" /></a>
+
 **Own your phone, silence the adware, and keep zero lock-in.**
 
 `AREOLE-DPC-HWTF` ("How Wait... That's Free?!") is a self-hosted, single-machine Android Provisioning Controller (DPC) and HTTP/QR console. Instead of handing management of a brand-new or freshly reset Android phone to a third-party cloud vendor—or settling for a drawer full of preloaded carrier installers, silent promo downloaders, and noisy notification popups—you run a tiny local Python server + compile your own signed Android DPC APK in about two minutes.
@@ -239,6 +241,21 @@ Want `AreoleDPC` completely gone after your phone is debloated and tuned?
 1. **In the Android app (`Areole Provisioner DPC`)** or **in Tab 2 of the Web UI**, choose **Deprovision & Remove Controller (Keep Personal)**.
 2. Under **Device Owner**, `AreoleDPC` ensures all `UserManager` restrictions are cleared and calls `dpm.clearDeviceOwnerApp("com.areole.dpc")`. Management ends immediately—your personal apps, accounts, photos, and hidden bloatware state stay untouched, and you can uninstall the DPC app normally afterwards.
 3. Under a **BYOD Work Profile**, it cleanly deletes only the Work container while keeping your main personal profile safe.
+
+---
+
+## Sponsors & Donations
+
+Sponsorship and donations support Shekinah Shine maintenance, sanctuary groundskeeping, 24/7 broadcast infrastructure, and open-source development.
+
+<p>
+  <a href="https://www.shekinahshine.org/?donate=paypal"><img src="docs/badges/paypal-donate-pill.svg" alt="Donate via PayPal" height="24" align="absmiddle" /></a> &nbsp;·&nbsp;
+  <a href="https://www.shekinahshine.org/?donate=paypal"><img src="docs/badges/icon-paypal.svg" width="16" height="16" align="absmiddle" alt="" /> PayPal Donate (Shekinah Shine)</a> &nbsp;·&nbsp;
+  <a href="https://www.shekinahshine.org/?donate=cashapp"><img src="docs/badges/icon-cashapp.svg" width="16" height="16" align="absmiddle" alt="" /> Cash App</a> &nbsp;·&nbsp;
+  <a href="https://www.shekinahshine.org/?donate=venmo"><img src="docs/badges/icon-venmo.svg" width="16" height="16" align="absmiddle" alt="" /> Venmo</a> &nbsp;·&nbsp;
+  <a href="https://github.com/sponsors/chieftechnicalwizard"><img src="docs/badges/icon-github-sponsors.svg" width="16" height="16" align="absmiddle" alt="" /> GitHub Sponsors</a> &nbsp;·&nbsp;
+  <a href="https://www.shekinahshine.org/"><img src="docs/badges/icon-shekinah.svg" width="16" height="16" align="absmiddle" alt="" /> Shekinah Shine Website</a>
+</p>
 
 ---
 
