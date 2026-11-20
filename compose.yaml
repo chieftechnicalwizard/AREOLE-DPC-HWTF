@@ -1,9 +1,16 @@
 # ==============================================================================
-# compose.yaml — Local Container Stack for AREOLE-DPC-HWTF
+# compose.yaml — Local Container Stack for AREOLE-DPC-HWTF (v1.0.1)
 #
 # Quick Start:
 #   docker compose up -d --build
 #   docker compose logs -f
+#
+# Upgrading an existing v1.0.0 volume to v1.0.1:
+#   docker compose up -d --build
+#   docker exec areole-dpc-hwtf /app/build_dpc.sh   # refreshes APK under same key
+#   (Includes Thingino v0.6.0 single-flight lock + 120s timeout fix & multi-distro
+#    host support. Set INSTALL_THINGINO: "1" below to pre-cache the 25 MB
+#    Thingino APK at container startup instead of on-demand during 6-tap setup.)
 #
 # Open http://127.0.0.1:8780 in your browser!
 #

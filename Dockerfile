@@ -1,6 +1,18 @@
 # ==============================================================================
-# Dockerfile — Self-Hosted Container Image for AREOLE-DPC-HWTF
+# Dockerfile — Self-Hosted Container Image for AREOLE-DPC-HWTF (v1.0.1)
 # ==============================================================================
+# v1.0.1 Container & Provisioning Fix Notes:
+#   - Fixed concurrent Thingino v0.6.0 APK download race during 6-tap QR setup:
+#     * Eliminated duplicate download in PolicyComplianceActivity so
+#       AreoleDeviceAdminReceiver (goAsync) owns one single-flight install.
+#     * Synchronized DpcConfig.installThinginoApk() with 120s read timeout, HTTP
+#       2xx validation, already-installed guard, and explicit SessionParams size.
+#     * Serialized server.py ensure_thingino_apk() with _THINGINO_LOCK (90s)
+#       and handled BrokenPipeError / ConnectionResetError cleanly in _send_file.
+#   - When upgrading an existing persistent volume from v1.0.0, run once with
+#     REBUILD_APK=1 (or `docker exec areole-dpc-hwtf /app/build_dpc.sh`) to
+#     recompile areole-dpc.apk (v1.0.1) under your existing signing keystore.
+#
 # Teaching Design Goals:
 #   1. Immutable code + zero baked secrets:
 #      Signing keys and APKs are NEVER baked into image layers! Instead, your
@@ -16,6 +28,10 @@
 # ==============================================================================
 
 FROM ubuntu:24.04
+
+LABEL org.opencontainers.image.title="AREOLE-DPC-HWTF" \
+      org.opencontainers.image.version="1.0.1" \
+      org.opencontainers.image.description="Self-hosted Android 6-tap QR Device Owner provisioner & debloater"
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH=amd64
