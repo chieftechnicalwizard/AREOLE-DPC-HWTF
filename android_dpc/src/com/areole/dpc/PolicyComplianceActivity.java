@@ -35,13 +35,10 @@ public class PolicyComplianceActivity extends Activity {
             DpcConfig.stripMotoBloatware(this, null);
         }
 
-        // Sync inventory to our self-hosted console without blocking Setup Wizard UI.
-        new Thread(() -> {
-            DpcConfig.syncWithServer(getApplicationContext());
-            if (DpcConfig.prefs(getApplicationContext()).getBoolean(DpcConfig.KEY_INSTALL_THINGINO, false)) {
-                DpcConfig.installThinginoApk(getApplicationContext());
-            }
-        }).start();
+        // Sync inventory without blocking Setup Wizard UI. Optional APK installs run
+        // inside AreoleDeviceAdminReceiver.onProfileProvisioningComplete() via goAsync()
+        // so Android keeps the process alive cleanly and avoids duplicate downloads.
+        new Thread(() -> DpcConfig.syncWithServer(getApplicationContext())).start();
 
         Intent res = new Intent();
         if (extras != null) {

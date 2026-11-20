@@ -199,25 +199,39 @@ public final class DpcConfig {
     /**
      * Downloads an optional companion APK (Thingino v0.6.0 hosted by your own server)
      * and commits it silently via Android's PackageInstaller session API.
+     * Synchronized to prevent concurrent duplicate downloads during provisioning.
      */
-    public static String installThinginoApk(Context ctx) {
+    public static synchronized String installThinginoApk(Context ctx) {
+        if (ctx.getPackageManager().getLaunchIntentForPackage("com.thingino.app") != null) {
+            return "Thingino already installed";
+        }
         String serverUrl = prefs(ctx).getString(KEY_SERVER_URL, "");
         if (serverUrl == null || serverUrl.isEmpty()) {
             return "Cannot install Thingino: Server URL not set";
         }
         String base = serverUrl.endsWith("/") ? serverUrl.substring(0, serverUrl.length() - 1) : serverUrl;
         String apkUrl = base + "/apk/thingino-android.apk";
+        HttpURLConnection conn = null;
         try {
+            conn = (HttpURLConnection) new URL(apkUrl).openConnection();
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(120000);
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) {
+                return "Thingino download HTTP " + code;
+            }
+            long contentLength = conn.getContentLengthLong();
+
             PackageInstaller installer = ctx.getPackageManager().getPackageInstaller();
             PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
                 PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+            if (contentLength > 0) {
+                params.setSize(contentLength);
+            }
             int sessionId = installer.createSession(params);
             try (PackageInstaller.Session session = installer.openSession(sessionId)) {
-                HttpURLConnection conn = (HttpURLConnection) new URL(apkUrl).openConnection();
-                conn.setConnectTimeout(10000);
-                conn.setReadTimeout(30000);
                 try (InputStream in = conn.getInputStream();
-                     OutputStream out = session.openWrite("thingino.apk", 0, -1)) {
+                     OutputStream out = session.openWrite("thingino.apk", 0, contentLength > 0 ? contentLength : -1)) {
                     byte[] buf = new byte[16384];
                     int n;
                     while ((n = in.read(buf)) > 0) {
@@ -234,6 +248,8 @@ public final class DpcConfig {
             }
         } catch (Throwable t) {
             return "Thingino install failed: " + t.getMessage();
+        } finally {
+            if (conn != null) conn.disconnect();
         }
     }
 

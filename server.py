@@ -245,31 +245,35 @@ def compute_apk_metadata() -> dict[str, Any]:
     }
 
 
-def ensure_thingino_apk() -> tuple[bool, str]:
-    """Download Thingino v0.6.0 APK into static/apps/ on demand and verify SHA-256."""
-    APPS_DIR.mkdir(parents=True, exist_ok=True)
-    if THINGINO_APK_PATH.exists():
-        digest = hashlib.sha256(THINGINO_APK_PATH.read_bytes()).hexdigest()
-        if digest == THINGINO_APK_SHA256:
-            return True, str(THINGINO_APK_PATH)
+_THINGINO_LOCK = threading.Lock()
 
-    tmp_path = APPS_DIR / f".{THINGINO_APK_NAME}.part"
-    try:
-        req = urllib.request.Request(
-            THINGINO_APK_URL,
-            headers={"User-Agent": "areole-dpc-hwtf/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=45) as resp, open(tmp_path, "wb") as fh:
-            shutil.copyfileobj(resp, fh)
-        digest = hashlib.sha256(tmp_path.read_bytes()).hexdigest()
-        if digest != THINGINO_APK_SHA256:
+
+def ensure_thingino_apk() -> tuple[bool, str]:
+    """Download Thingino v0.6.0 APK into static/apps/ safely under lock and verify SHA-256."""
+    with _THINGINO_LOCK:
+        APPS_DIR.mkdir(parents=True, exist_ok=True)
+        if THINGINO_APK_PATH.exists():
+            digest = hashlib.sha256(THINGINO_APK_PATH.read_bytes()).hexdigest()
+            if digest == THINGINO_APK_SHA256:
+                return True, str(THINGINO_APK_PATH)
+
+        tmp_path = APPS_DIR / f".{THINGINO_APK_NAME}.part"
+        try:
+            req = urllib.request.Request(
+                THINGINO_APK_URL,
+                headers={"User-Agent": "areole-dpc-hwtf/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=90) as resp, open(tmp_path, "wb") as fh:
+                shutil.copyfileobj(resp, fh)
+            digest = hashlib.sha256(tmp_path.read_bytes()).hexdigest()
+            if digest != THINGINO_APK_SHA256:
+                tmp_path.unlink(missing_ok=True)
+                return False, f"SHA-256 mismatch for Thingino APK ({digest})"
+            tmp_path.replace(THINGINO_APK_PATH)
+            return True, str(THINGINO_APK_PATH)
+        except Exception as exc:
             tmp_path.unlink(missing_ok=True)
-            return False, f"SHA-256 mismatch for Thingino APK ({digest})"
-        tmp_path.replace(THINGINO_APK_PATH)
-        return True, str(THINGINO_APK_PATH)
-    except Exception as exc:
-        tmp_path.unlink(missing_ok=True)
-        return False, f"Download failed: {exc}"
+            return False, f"Download failed: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -652,8 +656,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         if not head_only:
-            with open(path, "rb") as fh:
-                shutil.copyfileobj(fh, self.wfile)
+            try:
+                with open(path, "rb") as fh:
+                    shutil.copyfileobj(fh, self.wfile)
+            except (BrokenPipeError, ConnectionResetError):
+                sys.stderr.write(f"[areole-dpc] Client disconnected mid-transfer for {path.name}\n")
 
     def do_HEAD(self) -> None:
         """Android ManagedProvisioning issues HEAD before GET on the APK download URL."""
