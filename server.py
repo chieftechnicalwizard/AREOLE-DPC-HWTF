@@ -26,6 +26,18 @@ Security model:
     are reachable from the public internet.
   - The Web Console (/), QR generator, device command queue, and ADB controls
     return HTTP 403 Forbidden if accessed through a reverse-proxy tunnel header.
+
+Public multi-user mode (--public):
+  - Lets strangers share one deployment without seeing or touching each other's
+    devices. The browser gets a short-lived server-side session cookie; each
+    enrolled phone authenticates with the per-QR enrollment_token it already
+    carries (session-scoped, purged at session cleanup; first check-in binds
+    token -> device_id).
+  - Every admin route is scoped to the session's own devices; ADB control is
+    disabled entirely (it drives the server host's own adb daemon).
+  - When a session expires, DEPROVISION_KEEP_PERSONAL is auto-queued for each
+    of its devices, and all records (devices, inventories, commands, tokens)
+    are hard-purged after a grace window.
 """
 
 from __future__ import annotations
@@ -66,6 +78,9 @@ APK_PATH = Path(os.environ.get("AREOLE_APK_PATH", str(STATIC_DIR / "areole-dpc.a
 
 ADMIN_COMPONENT = "com.areole.dpc/com.areole.dpc.AreoleDeviceAdminReceiver"
 
+# Public-mode anonymous console session cookie name.
+SESSION_COOKIE = "areole_session"
+
 # Optional open-source Thingino IP camera viewer APK pinned to an exact upstream SHA-256.
 THINGINO_APK_NAME = "thingino-android.apk"
 THINGINO_APK_PATH = APPS_DIR / THINGINO_APK_NAME
@@ -103,9 +118,16 @@ MOTO_BLOAT_PACKAGES = [
     "com.LogiaGroup.LogiaDeck",
     "com.motorola.infolife.mobile.services",
     "com.tracfone.generic.mysiteaccount",
+    "com.tracfone.generic.mysites",
     "com.tracfone.preload.accountservices",
+    "com.swishme.tracfone",
+    "com.motorola.tracfone.rsu",
+    "com.motorola.tracfone.setup",
+    "com.dti.folderlauncher",
     "com.vzw.hss.myverizon",
     "com.verizon.mips.services",
+    "com.securityandprivacy.android.verizon.vms",
+    "com.aura.jet.att",
     "com.amazon.mShop.android.shopping",
     "com.amazon.appmanager",
     "com.booking",
@@ -143,6 +165,63 @@ CORE_NOTIFICATION_EXEMPT = {
 }
 
 _TUNNEL_PROC: subprocess.Popen[str] | None = None
+
+# ---------------------------------------------------------------------------
+# Public-mode helpers: per-IP rate limiting & payload sanity checks
+# ---------------------------------------------------------------------------
+_RATE_BUCKETS: dict[str, dict[str, list[float]]] = {}
+_RATE_LOCK = threading.Lock()
+
+# Valid Android package name characters (defensive; also caps list sizes).
+_PKG_RE = re.compile(r"^[A-Za-z0-9._]+$")
+
+# Actions a public-mode console may queue (defense-in-depth: the DPC already
+# ignores unknown actions, this just stops strangers from queueing arbitrary
+# strings against their own devices).
+PUBLIC_COMMAND_ACTIONS = {
+    "DEPROVISION_KEEP_PERSONAL",
+    "STRIP_BLOATWARE",
+    "HIDE_PACKAGES",
+    "UNHIDE_PACKAGES",
+    "CLEAR_RESTRICTIONS",
+    "MUTE_NOTIFICATIONS",
+    "INSTALL_THINGINO",
+}
+
+MAX_INSTALLED_APPS = 1000
+MAX_PAYLOAD_PACKAGES = 500
+MAX_BODY_BYTES_PUBLIC = 1_000_000
+
+
+def rate_allow(bucket: str, key: str, limit: int, window: float = 60.0) -> bool:
+    """Fixed-window per-key limiter (e.g. 30 check-ins per IP per minute)."""
+    now = time.time()
+    with _RATE_LOCK:
+        bucket_map = _RATE_BUCKETS.setdefault(bucket, {})
+        hits = [t for t in bucket_map.get(key, []) if t > now - window]
+        if len(hits) >= limit:
+            bucket_map[key] = hits
+            return False
+        hits.append(now)
+        bucket_map[key] = hits
+        if len(bucket_map) > 4096:  # opportunistic cleanup of idle keys
+            for k in list(bucket_map):
+                if not [t for t in bucket_map[k] if t > now - window]:
+                    del bucket_map[k]
+        return True
+
+
+def validate_command_payload(payload: dict[str, Any] | None) -> str | None:
+    """Return an error string for malformed HIDE/UNHIDE payloads, else None."""
+    if not payload:
+        return None
+    pkgs = payload.get("packages")
+    if not isinstance(pkgs, list) or not pkgs or len(pkgs) > MAX_PAYLOAD_PACKAGES:
+        return f"packages must be a non-empty list of at most {MAX_PAYLOAD_PACKAGES} entries"
+    for p in pkgs:
+        if not isinstance(p, str) or len(p) > 200 or not _PKG_RE.match(p):
+            return f"invalid package name: {p!r}"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +490,10 @@ def build_qr_payload(params: dict[str, Any], apk_meta: dict[str, Any]) -> dict[s
     wifi_ssid = (params.get("wifi_ssid") or "").strip()
     wifi_pass = (params.get("wifi_password") or "").strip()
     wifi_sec = (params.get("wifi_security") or "WPA").strip()
-    token = secrets.token_hex(12)
+    # Public mode passes a session-bound token minted (and hash-stored) by MdmDB;
+    # self-hosted mode simply generates an opaque one like before.
+    token = params.get("enrollment_token") or secrets.token_hex(12)
+    auto_retire = bool(params.get("auto_retire", False))
 
     if template_kind == "manageengine_ref":
         payload: dict[str, Any] = {
@@ -448,6 +530,7 @@ def build_qr_payload(params: dict[str, Any], apk_meta: dict[str, Any]) -> dict[s
                 "strip_bloatware": strip_bloat,
                 "notifications_off_default": notif_off,
                 "install_thingino": install_thingino,
+                "auto_retire": auto_retire,
             },
         }
         if template_kind == "legacy_6_9":
@@ -499,13 +582,44 @@ class MdmDB:
                 )
                 """
             )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    purge_at REAL NOT NULL,
+                    retired INTEGER DEFAULT 0
+                )
+                """
+            )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS enrollment_tokens (
+                    token_hash TEXT PRIMARY KEY,
+                    token_raw TEXT,
+                    session_id TEXT NOT NULL,
+                    device_id TEXT,
+                    created_at REAL NOT NULL
+                )
+                """
+            )
+            # Migration for databases created before public mode: add the
+            # devices.owner_session and enrollment_tokens.token_raw columns if
+            # they are missing.
+            device_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(devices)").fetchall()}
+            if "owner_session" not in device_cols:
+                self.conn.execute("ALTER TABLE devices ADD COLUMN owner_session TEXT")
+            token_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(enrollment_tokens)").fetchall()}
+            if "token_raw" not in token_cols:
+                self.conn.execute("ALTER TABLE enrollment_tokens ADD COLUMN token_raw TEXT")
 
     def upsert_device(self, data: dict[str, Any]) -> None:
         with self.lock, self.conn:
             self.conn.execute(
                 """
-                INSERT INTO devices(device_id, username, model, android_version, role, hidden_count, installed_apps_json, last_seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO devices(device_id, username, model, android_version, role, hidden_count, installed_apps_json, last_seen, owner_session)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(device_id) DO UPDATE SET
                     username=excluded.username,
                     model=excluded.model,
@@ -513,7 +627,8 @@ class MdmDB:
                     role=excluded.role,
                     hidden_count=excluded.hidden_count,
                     installed_apps_json=excluded.installed_apps_json,
-                    last_seen=excluded.last_seen
+                    last_seen=excluded.last_seen,
+                    owner_session=COALESCE(devices.owner_session, excluded.owner_session)
                 """,
                 (
                     data.get("device_id", "unknown"),
@@ -524,12 +639,19 @@ class MdmDB:
                     int(data.get("hidden_count", 0)),
                     json.dumps(data.get("installed_apps", [])),
                     time.time(),
+                    data.get("owner_session"),
                 ),
             )
 
-    def list_devices(self) -> list[dict[str, Any]]:
+    def list_devices(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        """List devices, optionally scoped to one public-mode session's ownership."""
         with self.lock:
-            rows = self.conn.execute("SELECT * FROM devices ORDER BY last_seen DESC").fetchall()
+            if session_id is not None:
+                rows = self.conn.execute(
+                    "SELECT * FROM devices WHERE owner_session=? ORDER BY last_seen DESC", (session_id,)
+                ).fetchall()
+            else:
+                rows = self.conn.execute("SELECT * FROM devices ORDER BY last_seen DESC").fetchall()
         out = []
         for r in rows:
             d = dict(r)
@@ -569,6 +691,160 @@ class MdmDB:
         with self.lock, self.conn:
             self.conn.execute("DELETE FROM devices WHERE device_id=?", (device_id,))
             self.conn.execute("DELETE FROM commands WHERE device_id=?", (device_id,))
+
+    # -----------------------------------------------------------------
+    # Public-mode sessions & enrollment tokens
+    # -----------------------------------------------------------------
+    def create_session(self, ttl_hours: float, grace_hours: float) -> dict[str, Any]:
+        """Create a fresh anonymous console session and return its row."""
+        sid = secrets.token_hex(16)
+        now = time.time()
+        expires_at = now + ttl_hours * 3600.0
+        purge_at = expires_at + grace_hours * 3600.0
+        with self.lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO sessions(session_id, created_at, expires_at, purge_at, retired) VALUES (?, ?, ?, ?, 0)",
+                (sid, now, expires_at, purge_at),
+            )
+        return {"session_id": sid, "created_at": now, "expires_at": expires_at, "purge_at": purge_at, "retired": 0}
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        with self.lock:
+            row = self.conn.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+        return dict(row) if row else None
+
+    def mark_retired(self, session_id: str) -> None:
+        with self.lock, self.conn:
+            self.conn.execute("UPDATE sessions SET retired=1 WHERE session_id=?", (session_id,))
+
+    def delete_session_cascade(self, session_id: str) -> None:
+        """Hard-delete a session plus its tokens, devices, and queued commands."""
+        with self.lock, self.conn:
+            dev_ids = [
+                r["device_id"]
+                for r in self.conn.execute("SELECT device_id FROM devices WHERE owner_session=?", (session_id,)).fetchall()
+            ]
+            if dev_ids:
+                marks = ",".join("?" * len(dev_ids))
+                self.conn.execute(f"DELETE FROM commands WHERE device_id IN ({marks})", dev_ids)
+            self.conn.execute("DELETE FROM devices WHERE owner_session=?", (session_id,))
+            self.conn.execute("DELETE FROM enrollment_tokens WHERE session_id=?", (session_id,))
+            self.conn.execute("DELETE FROM sessions WHERE session_id=?", (session_id,))
+
+    def mint_token(self, session_id: str, max_unconsumed: int = 20) -> str | None:
+        """
+        Mint a new enrollment token for a session. Returns the RAW token, or
+        None if the session already holds too many unconsumed tokens. The raw
+        value is kept so the console can re-serve the SAME token while the
+        visitor edits QR fields (see active_token_raw); it dies with the
+        session's purge. Check-in verification still matches by SHA-256 hash.
+        """
+        raw = secrets.token_hex(12)
+        token_hash = hashlib.sha256(raw.encode("ascii")).hexdigest()
+        with self.lock, self.conn:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS n FROM enrollment_tokens WHERE session_id=? AND device_id IS NULL",
+                (session_id,),
+            ).fetchone()
+            if row and row["n"] >= max_unconsumed:
+                return None
+            self.conn.execute(
+                "INSERT INTO enrollment_tokens(token_hash, token_raw, session_id, device_id, created_at) VALUES (?, ?, ?, NULL, ?)",
+                (token_hash, raw, session_id, time.time()),
+            )
+        return raw
+
+    def active_token_raw(self, session_id: str) -> str | None:
+        """Raw value of the session's most recent UNCONSUMED token (re-served as-is)."""
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT token_raw FROM enrollment_tokens WHERE session_id=? AND device_id IS NULL ORDER BY created_at DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return (row["token_raw"] if row else None) or None
+
+    def revoke_unconsumed_tokens(self, session_id: str) -> None:
+        """Invalidate every not-yet-bound token of a session (Regenerate semantics:
+        earlier QR printouts that were never scanned stop working immediately)."""
+        with self.lock, self.conn:
+            self.conn.execute(
+                "DELETE FROM enrollment_tokens WHERE session_id=? AND device_id IS NULL",
+                (session_id,),
+            )
+
+    def checkin_public(self, data: dict[str, Any]) -> tuple[bool, int, str]:
+        """
+        Atomically authorize a public-mode device check-in under one lock:
+          1. Resolve the raw enrollment token by its SHA-256 and reject
+             unknown or past-purge tokens.
+          2. Reject devices already owned by a different session.
+          3. Bind the token to this device first-use-wins (a token can never
+             claim a second device) and stamp ownership onto the payload for
+             the caller's upsert.
+        Returns (ok, http_status, error_message); on ok, data['owner_session']
+        has been set.
+        """
+        raw_token = (data.get("token") or "").strip()
+        dev_id = (data.get("device_id") or "").strip()
+        if not raw_token or not dev_id:
+            return False, 400, "device_id and token required"
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        with self.lock, self.conn:
+            tok = self.conn.execute(
+                """
+                SELECT t.token_hash, t.session_id, t.device_id, s.purge_at
+                FROM enrollment_tokens t JOIN sessions s ON s.session_id = t.session_id
+                WHERE t.token_hash=?
+                """,
+                (token_hash,),
+            ).fetchone()
+            if tok is None or tok["purge_at"] <= time.time():
+                return False, 401, "Unknown or expired enrollment token"
+            owner = self.conn.execute(
+                "SELECT owner_session FROM devices WHERE device_id=?", (dev_id,)
+            ).fetchone()
+            existing = (owner["owner_session"] if owner else None) or None
+            if existing is not None and existing != tok["session_id"]:
+                return False, 403, "Device already enrolled in another session"
+            if tok["device_id"] is None:
+                self.conn.execute(
+                    "UPDATE enrollment_tokens SET device_id=? WHERE token_hash=?", (dev_id, token_hash)
+                )
+            elif tok["device_id"] != dev_id:
+                return False, 403, "Enrollment token already bound to another device"
+            data["owner_session"] = tok["session_id"]
+            return True, 200, ""
+
+    def device_owner(self, device_id: str) -> str | None:
+        """Return the owning session_id of a device row (None if absent/unowned)."""
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT owner_session FROM devices WHERE device_id=?", (device_id,)
+            ).fetchone()
+        return (row["owner_session"] if row else None) or None
+
+    def delete_tokens_for_device(self, device_id: str) -> None:
+        with self.lock, self.conn:
+            self.conn.execute("DELETE FROM enrollment_tokens WHERE device_id=?", (device_id,))
+
+    def sessions_to_retire(self, now: float) -> list[dict[str, Any]]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT * FROM sessions WHERE retired=0 AND expires_at<=?", (now,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def sessions_to_purge(self, now: float) -> list[dict[str, Any]]:
+        with self.lock:
+            rows = self.conn.execute("SELECT * FROM sessions WHERE purge_at<=?", (now,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def owned_device_ids(self, session_id: str) -> list[str]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT device_id FROM devices WHERE owner_session=?", (session_id,)
+            ).fetchall()
+        return [r["device_id"] for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +896,10 @@ def adb_list_devices() -> list[dict[str, Any]]:
 class Handler(http.server.BaseHTTPRequestHandler):
     db: MdmDB
     port: int = 8780
+    public_mode: bool = False
+    public_base_url: str = ""
+    session_ttl: float = 48.0
+    retire_grace: float = 24.0
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(f"[areole-dpc] {self.address_string()} - {fmt % args}\n")
@@ -636,12 +916,81 @@ class Handler(http.server.BaseHTTPRequestHandler):
             or "trycloudflare.com" in host
         )
 
+    # -----------------------------------------------------------------
+    # Public-mode session handling (browser cookie + phone enrollment token)
+    # -----------------------------------------------------------------
+    def _client_ip(self) -> str:
+        """
+        Best-effort client IP for rate limiting. CF-Connecting-IP is
+        authoritative behind Cloudflare; otherwise the RIGHTMOST X-Forwarded-For
+        entry is used — earlier entries arrive from the client and are trivially
+        spoofable, while the rightmost one was appended by our own trusted
+        proxy. Direct connections (no proxy headers) use the socket peer.
+        """
+        cf = (self.headers.get("CF-Connecting-IP") or "").strip()
+        if cf:
+            return cf
+        xff = (self.headers.get("X-Forwarded-For") or "").strip()
+        if xff:
+            return xff.split(",")[-1].strip()
+        return self.client_address[0] if self.client_address else "unknown"
+
+    def _get_cookie(self, name: str) -> str:
+        raw = self.headers.get("Cookie") or ""
+        for part in raw.split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == name:
+                return v
+        return ""
+
+    def _ensure_session(self) -> dict[str, Any] | None:
+        """
+        Public mode only: return a live console session for this browser,
+        creating one (and queueing a Set-Cookie header) when missing/expired.
+        Returns None only when session creation is rate-limited (caller: 429).
+        A session is reusable while now < expires_at; between expires_at and
+        purge_at it lingers solely so its phones can fetch the queued
+        auto-deprovision command, then the sweeper purges everything.
+        """
+        sid = self._get_cookie(SESSION_COOKIE)
+        if sid:
+            sess = self.db.get_session(sid)
+            if sess and sess["expires_at"] > time.time():
+                return sess
+        if not rate_allow("session-create", self._client_ip(), 10):
+            return None
+        sess = self.db.create_session(self.session_ttl, self.retire_grace)
+        # Mark Secure only when the request arrived over HTTPS (public
+        # deployments terminate TLS at a reverse proxy that sets the header).
+        secure = "; Secure" if (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower() == "https" else ""
+        self._pending_cookie = f"{SESSION_COOKIE}={sess['session_id']}; Path=/; HttpOnly; SameSite=Lax{secure}"
+        return sess
+
+    def _emit_pending_cookie(self) -> None:
+        cookie = getattr(self, "_pending_cookie", None)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+            self._pending_cookie = None
+
+    def _request_public_base_url(self) -> str:
+        """Public base URL for QR payloads: configured value, else Host + forwarded proto."""
+        if self.public_base_url:
+            return self.public_base_url
+        host = (self.headers.get("Host") or "").strip() or f"127.0.0.1:{self.port}"
+        proto = (self.headers.get("X-Forwarded-Proto") or "http").split(",")[0].strip() or "http"
+        return f"{proto}://{host}"
+
+    def _session_owns_device(self, sess: dict[str, Any], device_id: str) -> bool:
+        """Ownership check for admin actions; False also when the row is absent."""
+        return bool(device_id) and self.db.device_owner(device_id) == sess["session_id"]
+
     def _send_json(self, obj: Any, status: int = 200) -> None:
         raw = json.dumps(obj, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
+        self._emit_pending_cookie()
         self.end_headers()
         self.wfile.write(raw)
 
@@ -654,6 +1003,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(size))
         self.send_header("Cache-Control", "no-store")
+        self._emit_pending_cookie()
         self.end_headers()
         if not head_only:
             try:
@@ -711,20 +1061,48 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
             self.wfile.write(page)
             return
 
-        # Isolate administrative console & status APIs from public Cloudflare tunnel visitors
-        if self._is_public_tunnel():
+        # Isolate administrative console & status APIs from public Cloudflare tunnel
+        # visitors. Public mode skips this: every admin route is session-gated there,
+        # and a real Cloudflare-proxied domain sends CF-* headers that would otherwise
+        # lock the operator's own dashboard out.
+        if not self.public_mode and self._is_public_tunnel():
             self._send_json({"error": "Admin UI disabled on public tunnel"}, 403)
             return
 
         if path == "/":
+            if self.public_mode and not self._ensure_session():
+                self._send_json({"error": "Too many new sessions from this IP"}, 429)
+                return
             self._send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
             return
 
         if path == "/api/status":
             apk_meta = compute_apk_metadata()
+            if self.public_mode:
+                sess = self._ensure_session()
+                if not sess:
+                    self._send_json({"error": "Too many new sessions from this IP"}, 429)
+                    return
+                self._send_json(
+                    {
+                        "port": self.port,
+                        "mode": "public",
+                        "public_base_url": self._request_public_base_url(),
+                        "session": {
+                            "created_at": sess["created_at"],
+                            "expires_at": sess["expires_at"],
+                            "retired": bool(sess["retired"]),
+                        },
+                        "apk": apk_meta,
+                        "thingino_cached": THINGINO_APK_PATH.exists(),
+                        "devices": self.db.list_devices(sess["session_id"]),
+                    }
+                )
+                return
             self._send_json(
                 {
                     "port": self.port,
+                    "mode": "self_hosted",
                     "https_tunnel_url": get_tunnel_url(),
                     "lan_ips": discover_lan_ips(),
                     "apk": apk_meta,
@@ -736,6 +1114,9 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
             return
 
         if path == "/api/adb/status":
+            if self.public_mode:
+                self._send_json({"error": "ADB control disabled in public mode"}, 403)
+                return
             self._send_json({"adb_path": resolve_adb(), "devices": adb_list_devices()})
             return
 
@@ -745,6 +1126,9 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
         path = self.path.split("?", 1)[0]
         try:
             length = int(self.headers.get("Content-Length", "0"))
+            if self.public_mode and length > MAX_BODY_BYTES_PUBLIC:
+                self._send_json({"error": "Request body too large"}, 413)
+                return
             raw = self.rfile.read(length) if length > 0 else b"{}"
             body = json.loads(raw.decode("utf-8"))
         except Exception:
@@ -753,17 +1137,58 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
 
         # Allowed over tunnel & LAN so enrolled devices report inventory cleanly
         if path == "/api/device/checkin":
+            if self.public_mode:
+                if not rate_allow("checkin", self._client_ip(), 30):
+                    self._send_json({"error": "Rate limit exceeded"}, 429)
+                    return
+                ok, status, err = self.db.checkin_public(body)
+                if not ok:
+                    self._send_json({"error": err}, status)
+                    return
+                apps = body.get("installed_apps")
+                if isinstance(apps, list) and len(apps) > MAX_INSTALLED_APPS:
+                    body["installed_apps"] = apps[:MAX_INSTALLED_APPS]
             self.db.upsert_device(body)
             dev_id = body.get("device_id", "")
             cmds = self.db.pop_commands(dev_id) if dev_id else []
             self._send_json({"ok": True, "commands": cmds})
             return
 
-        if self._is_public_tunnel():
+        if not self.public_mode and self._is_public_tunnel():
             self._send_json({"error": "Admin API disabled on public tunnel"}, 403)
             return
 
         if path == "/api/qr":
+            if self.public_mode:
+                sess = self._ensure_session()
+                if not sess:
+                    self._send_json({"error": "Too many new sessions from this IP"}, 429)
+                    return
+                if not rate_allow("qr", self._client_ip(), 30):
+                    self._send_json({"error": "Rate limit exceeded"}, 429)
+                    return
+                # Re-serve the session's still-unconsumed token so the QR stays
+                # stable while the visitor edits fields (the UI re-renders on every
+                # keystroke, and minting a fresh token per render would exhaust the
+                # pool). A new token is minted only when: none is active, the
+                # previous one was consumed by an enrolled device, or the client
+                # explicitly asks to rotate (Regenerate button).
+                if (body.get("template") or "") != "manageengine_ref":
+                    token = None
+                    if not body.get("regenerate"):
+                        token = self.db.active_token_raw(sess["session_id"])
+                    else:
+                        # Explicit rotation: earlier unscanned QRs must stop working.
+                        self.db.revoke_unconsumed_tokens(sess["session_id"])
+                    if token is None:
+                        token = self.db.mint_token(sess["session_id"])
+                    if token is None:
+                        self._send_json({"error": "Too many unconsumed enrollment tokens in this session"}, 429)
+                        return
+                    body["enrollment_token"] = token
+                body["auto_retire"] = True
+                # Force the QR to point at this deployment's public origin.
+                body["server_url"] = self._request_public_base_url()
             apk_meta = compute_apk_metadata()
             body.setdefault("port", self.port)
             payload = build_qr_payload(body, apk_meta)
@@ -777,18 +1202,47 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
             if not dev_id or not action:
                 self._send_json({"error": "device_id and action required"}, 400)
                 return
+            if self.public_mode:
+                sess = self._ensure_session()
+                if not sess:
+                    self._send_json({"error": "Too many new sessions from this IP"}, 429)
+                    return
+                if action not in PUBLIC_COMMAND_ACTIONS:
+                    self._send_json({"error": "Unknown action"}, 400)
+                    return
+                if not self._session_owns_device(sess, dev_id):
+                    self._send_json({"error": "Unknown device"}, 404)
+                    return
+                err = validate_command_payload(body.get("payload"))
+                if err:
+                    self._send_json({"error": err}, 400)
+                    return
             self.db.queue_command(dev_id, action, body.get("payload"))
             self._send_json({"ok": True})
             return
 
         if path == "/api/device/delete":
             dev_id = (body.get("device_id") or "").strip()
+            if self.public_mode and dev_id:
+                sess = self._ensure_session()
+                if not sess:
+                    self._send_json({"error": "Too many new sessions from this IP"}, 429)
+                    return
+                if not self._session_owns_device(sess, dev_id):
+                    self._send_json({"error": "Unknown device"}, 404)
+                    return
             if dev_id:
                 self.db.delete_device(dev_id)
+                if self.public_mode:
+                    # Forget the device fully: its enrollment token dies with the row.
+                    self.db.delete_tokens_for_device(dev_id)
             self._send_json({"ok": True})
             return
 
         if path == "/api/adb/action":
+            if self.public_mode:
+                self._send_json({"error": "ADB control disabled in public mode"}, 403)
+                return
             action = body.get("action", "")
             username = (body.get("username") or "Owner").strip() or "Owner"
             logs: list[str] = []
@@ -900,6 +1354,37 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
         self._send_json({"error": "Not found"}, 404)
 
 
+def start_expiry_sweeper(db: MdmDB, interval: float = 300.0) -> None:
+    """
+    Public-mode lifecycle daemon:
+      1. Retire: when a session passes expires_at, queue DEPROVISION_KEEP_PERSONAL
+         for each of its devices exactly once (delivered whenever the phone next
+         checks in — app open, reboot, or its periodic background sync job).
+      2. Purge: after the grace window, hard-delete the session, its tokens,
+         its devices, inventories, and any undelivered commands.
+    """
+    def _sweep() -> None:
+        while True:
+            try:
+                now = time.time()
+                for sess in db.sessions_to_retire(now):
+                    for dev_id in db.owned_device_ids(sess["session_id"]):
+                        db.queue_command(dev_id, "DEPROVISION_KEEP_PERSONAL")
+                    db.mark_retired(sess["session_id"])
+                    sys.stderr.write(
+                        f"[areole-dpc] session {sess['session_id'][:8]}… expired: queued auto-deprovision "
+                        f"for {len(db.owned_device_ids(sess['session_id']))} device(s)\n"
+                    )
+                for sess in db.sessions_to_purge(now):
+                    db.delete_session_cascade(sess["session_id"])
+                    sys.stderr.write(f"[areole-dpc] session {sess['session_id'][:8]}… purged (records deleted)\n")
+            except Exception as exc:  # pragma: no cover - sweeper must never die
+                sys.stderr.write(f"[areole-dpc] expiry sweeper error: {exc}\n")
+            time.sleep(interval)
+
+    threading.Thread(target=_sweep, daemon=True, name="areole-expiry-sweeper").start()
+
+
 def print_banner() -> None:
     if sys.stdout.isatty() and BANNER_PATH.exists():
         print(BANNER_PATH.read_text(encoding="utf-8", errors="ignore"), flush=True)
@@ -911,6 +1396,29 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=int(os.environ.get("AREOLE_MDM_PORT", "8780")), help="HTTP port (default: 8780)")
     parser.add_argument("--tunnel", action="store_true", help="Start an ephemeral Cloudflare HTTPS tunnel for Android 14-16 6-tap QR")
     parser.add_argument("--no-banner", action="store_true", help="Suppress ANSI art banner on startup")
+    parser.add_argument(
+        "--public",
+        action="store_true",
+        default=os.environ.get("AREOLE_PUBLIC", "").strip().lower() in ("1", "true", "yes"),
+        help="Run as a public multi-user service: session cookies, token-bound devices, auto-deprovision on expiry, ADB disabled",
+    )
+    parser.add_argument(
+        "--public-base-url",
+        default=os.environ.get("AREOLE_PUBLIC_BASE_URL", "").strip().rstrip("/"),
+        help="Canonical public origin for QR payloads, e.g. https://areole.example.com (default: derive from Host + X-Forwarded-Proto)",
+    )
+    parser.add_argument(
+        "--session-ttl",
+        type=float,
+        default=float(os.environ.get("AREOLE_SESSION_TTL", "48")),
+        help="Public mode: console session lifetime in hours (default: 48; fractions allowed for testing)",
+    )
+    parser.add_argument(
+        "--retire-grace",
+        type=float,
+        default=float(os.environ.get("AREOLE_RETIRE_GRACE", "24")),
+        help="Public mode: hours after expiry before records are hard-purged (default: 24)",
+    )
     args = parser.parse_args()
 
     if not args.no_banner:
@@ -921,9 +1429,25 @@ def main() -> None:
 
     Handler.db = MdmDB(DB_PATH)
     Handler.port = args.port
+    Handler.public_mode = args.public
+    Handler.public_base_url = args.public_base_url
+    Handler.session_ttl = max(args.session_ttl, 0.001)
+    Handler.retire_grace = max(args.retire_grace, 0.001)
 
     srv = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"AreoleDPC Web Console -> http://127.0.0.1:{args.port}", flush=True)
+
+    if args.public:
+        if args.tunnel:
+            print("[!] --tunnel is not used together with --public (put the site behind your own HTTPS reverse proxy); skipping tunnel.", flush=True)
+            args.tunnel = False
+        start_expiry_sweeper(Handler.db, interval=float(os.environ.get("AREOLE_SWEEP_INTERVAL", "300")))
+        base = Handler.public_base_url or "(derived from request Host header)"
+        print(
+            f"PUBLIC multi-user mode  -> sessions live {Handler.session_ttl}h, auto-deprovision on expiry, "
+            f"records purged after {Handler.retire_grace}h grace, ADB controls disabled. Base URL: {base}",
+            flush=True,
+        )
 
     if args.tunnel:
         tunnel_url = start_quick_tunnel(args.port)

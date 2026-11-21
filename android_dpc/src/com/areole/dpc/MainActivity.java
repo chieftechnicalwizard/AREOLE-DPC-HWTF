@@ -170,9 +170,17 @@ public class MainActivity extends Activity {
             .setTitle("Deprovision Device?")
             .setMessage(msg)
             .setPositiveButton("Deprovision", (d, w) -> {
-                String out = DpcConfig.deprovisionKeepPersonal(this);
-                Toast.makeText(this, out, Toast.LENGTH_LONG).show();
-                refreshStatus();
+                // Run on a worker thread: deprovisioning now converts hidden
+                // bloat to user-0 uninstalls and waits (up to a few seconds)
+                // for the PackageInstaller sessions to settle before clearing
+                // Device Owner — too much work for the main thread.
+                new Thread(() -> {
+                    final String out = DpcConfig.deprovisionKeepPersonal(getApplicationContext());
+                    mainHandler.post(() -> {
+                        Toast.makeText(this, out, Toast.LENGTH_LONG).show();
+                        refreshStatus();
+                    });
+                }, "areole-deprovision").start();
             })
             .setNegativeButton("Cancel", null)
             .show();
@@ -210,6 +218,12 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refreshStatus();
+        // Second chance for auto-retire background sync: if scheduling was skipped
+        // or failed during provisioning-complete (AreoleSyncJobService.schedule is
+        // failure-tolerant), re-assert it whenever the user opens the app.
+        if (DpcConfig.prefs(this).getBoolean(DpcConfig.KEY_AUTO_RETIRE, false)) {
+            AreoleSyncJobService.schedule(this);
+        }
         if (poller == null || poller.isShutdown()) {
             poller = Executors.newSingleThreadScheduledExecutor();
             poller.scheduleWithFixedDelay(() -> {
