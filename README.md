@@ -36,7 +36,7 @@ Scan one QR code on the factory **Welcome** screen (tap empty space **6 times**)
 
 - **Zero accounts, zero cloud fees, zero telemetry:** Everything compiles locally, signs with a freshly generated private keystore on your own disk (`.gitignore`d), and runs on pure Python 3 standard library + SQLite.
 - **Unrestricted by design:** Commercial enterprise tools lock down USB debugging, app installs, Wi-Fi changes, and accounts. `AreoleDPC` actively calls `DevicePolicyManager.clearUserRestriction()` on all 12 common lockouts so you always stay the boss of your hardware.
-- **Safe, reversible debloating:** Hides retail/carrier bloat packages with `setApplicationHidden()` (no `/system` partition surgery, so OS security updates continue working) while carefully leaving core utilities and everyday essentials—**Dialer, Messages, Camera, Play Store, Google Drive, YouTube Music, YouTube, and Google Photos**—completely untouched.
+- **Safe, reversible debloating:** Hides retail/carrier bloat packages with `setApplicationHidden()` (no `/system` partition surgery, so OS security updates continue working) while carefully leaving core utilities and everyday essentials—**Dialer, Messages, Camera, Play Store, Google Drive, YouTube Music, YouTube, and Google Photos**—completely untouched. While management is active you can unhide anything; when you later deprovision, hidden packages are converted to permanent user-0 uninstalls so the clean phone survives the exit (see *Non-Destructive Deprovisioning* below).
 - **Calm status bar out of the box:** Optional **Notifications Off by Default** denies `POST_NOTIFICATIONS` on non-core apps on Android 13–16+, leaving calls, SMS, alarms, and system alerts intact.
 - **Non-destructive exit:** Because first-boot **Device Owner** (`PROVISIONING_MODE_FULLY_MANAGED_DEVICE`) lets the controller call `clearDeviceOwnerApp()`, you can revoke management anytime from the phone app or Web UI without factory-resetting your personal data.
 - **Optional IP camera companion:** Built-in, SHA-256-verified fetch & `PackageInstaller` delivery for the open-source [Thingino Android App (`v0.6.0`)](https://github.com/thingino/thingino-app).
@@ -167,6 +167,45 @@ docker run -d --name areole-dpc \
 
 ---
 
+## Option C: Public Multi-User Mode (`--public`)
+
+Run **one deployment for many strangers** — each visitor provisions and debloats *their own* phone without anyone being able to see or touch anyone else's device, and without creating accounts. The default self-hosted behavior (full console, LAN discovery, ADB tab) stays exactly as before; public mode is opt-in.
+
+```bash
+AREOLE_PUBLIC=1 AREOLE_PUBLIC_BASE_URL=https://areole.example.com python3 server.py --public
+# or: python3 server.py --public --public-base-url https://areole.example.com
+# containers: ENABLE_PUBLIC=1 (+ AREOLE_PUBLIC_BASE_URL) in compose.yaml
+```
+
+### How isolation works
+
+| Credential | Holder | Grants |
+| :--- | :--- | :--- |
+| `areole_session` cookie | Each visitor's browser (auto-created, `HttpOnly`/`SameSite=Lax`, `Secure` behind HTTPS) | A private ~48h session: QR generation + visibility/control of **only** that session's devices |
+| `enrollment_token` | Each enrolled phone (embedded in its QR, sent on every check-in; the server keeps the token only for the life of its session, then purges it) | That one device's check-in — first check-in binds token→device, and a token can never claim a second device or another session's device |
+
+Concretely: `/api/status`, `/api/device/command`, and `/api/device/delete` are scoped to the session's own devices (cross-session targets return `404`, revealing nothing); `/api/device/checkin` requires a valid token; `/api/qr` always points at your canonical public origin; the ADB tab is disabled (it drives the *server host's* adb daemon and cannot be multi-tenant). Per-IP rate limits apply to check-ins, QR generation, and session creation.
+
+### The lifecycle ends with the corporate stuff gone
+
+When a session expires (default **48h**; the expected flow is under a day), the server automatically queues **`DEPROVISION_KEEP_PERSONAL`** for each of its devices. Phones enrolled in public mode run a light built-in background check-in (~every 15 min, set only when the QR carried `auto_retire`) so that final *remove-the-controller* command is delivered even if the user never reopens the app. After a grace window (default 24h) every trace is purged: devices, app inventories, commands, tokens. Users can always leave earlier with the in-app **Deprovision & Remove Controller** button, which works fully offline.
+
+### Deployment requirements
+
+- **Your own HTTPS reverse proxy in front** (Android 14–16 Setup Wizard rejects plain `http://` download URLs). It must forward `X-Forwarded-Proto` so the session cookie gets its `Secure` flag. Caddy example:
+
+  ```
+  areole.example.com {
+      reverse_proxy 127.0.0.1:8780
+  }
+  ```
+
+- Set `AREOLE_PUBLIC_BASE_URL` so QR payloads carry your canonical origin (otherwise it is derived from each request's `Host` + `X-Forwarded-Proto`).
+- Tuning: `AREOLE_SESSION_TTL` (hours, default 48) and `AREOLE_RETIRE_GRACE` (hours after expiry before the hard purge, default 24).
+- Remember: with one signing keystore you are the Device Owner identity strangers' phones trust — keep `keystore/` safe and expect abuse-handling responsibilities (e.g. someone provisioning a stolen phone).
+
+---
+
 ## Step-by-Step: 6-Tap QR Phone Enrollment
 
 1. **Choose Options in the Web UI (`http://127.0.0.1:8780`)**
@@ -183,6 +222,22 @@ docker run -d --name areole-dpc \
    - Android joins Wi-Fi, downloads `areole-dpc.apk` over HTTPS, verifies the `PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM`, creates Device Owner scope, applies bloat-hiding + notification silence, and returns to the desktop ready to use!
 4. **Already Set Up Without Factory Resetting? (ADB & BYOD Modes)**
    - Visit `<server_url>/setup` on your phone browser to install `areole-dpc.apk` and create a removable **Work Profile**, OR plug in USB / pair **Wireless Debugging** in Tab 3 (`USB / Wireless ADB Control`) to run one-click user-0 debloating, notification muting, or optional Thingino installation without resetting at all.
+
+### Troubleshooting: Setup Wizard crash-loops after scanning the QR
+
+On some GMS carrier builds (observed on a **Moto G Power 2026 / Tracfone, Android 16**), the Play Store auto-installs Google's **Android Device Policy** (`com.google.android.apps.work.clouddpc`) during early setup. Android 14+ then delegates provisioning *finalization* to it as the system's "provisioning role holder" (`ROLE_HOLDER_PROVISION_FINALIZATION`), which mishandles third-party DPCs and leaves Setup Wizard's script null — `WizardManagerActivity` NPE-crash-loops.
+
+**How it looks:** after the *"This device isn't private"* consent screen the wizard reaches *"Registering device" → "Checking for updates"*, then "Android setup keeps stopping" in a loop, with Close/Back returning to a QR screen. 
+
+**The provisioning itself still succeeds** at that point: Device Owner binds, the debloat applies, and the phone checks into your console — only the wizard's remaining screens break. Exit to the launcher with Back/Close, then to finish cleanly (USB debugging enabled, or on a prior-exited device):
+
+```bash
+adb shell pm disable-user --user 0 com.google.android.apps.work.clouddpc
+adb shell settings put secure user_setup_complete 1
+adb shell settings put global device_provisioned 1
+```
+
+Then reboot once to refresh launcher icons. Verify enrollment via the console's **Enrolled Devices** tab (`Role` should read `DEVICE_OWNER`). Carrier-bloat package names vary per firmware — hide any stragglers manually from the **App Inventory drawer**; packages marked "non-disable" by the OEM (e.g. `com.amazon.appmanager` on some builds) cannot be removed by any method short of root.
 
 ---
 
@@ -239,7 +294,7 @@ Every source file is heavily commented so you can audit and learn the exact Andr
 Want `AreoleDPC` completely gone after your phone is debloated and tuned?
 
 1. **In the Android app (`Areole Provisioner DPC`)** or **in Tab 2 of the Web UI**, choose **Deprovision & Remove Controller (Keep Personal)**.
-2. Under **Device Owner**, `AreoleDPC` ensures all `UserManager` restrictions are cleared and calls `dpm.clearDeviceOwnerApp("com.areole.dpc")`. Management ends immediately—your personal apps, accounts, photos, and hidden bloatware state stay untouched, and you can uninstall the DPC app normally afterwards.
+2. Under **Device Owner**, `AreoleDPC` does two things before calling `dpm.clearDeviceOwnerApp("com.areole.dpc")`: it clears all `UserManager` restrictions, and it **converts every hidden bloat package into a permanent user-0 uninstall** (`PackageInstaller`, identical in effect to the ADB path's `pm uninstall -k --user 0`). This step exists because Android otherwise *restores* every app an admin hid with `setApplicationHidden()` the moment that admin is removed — silently undoing your debloat. User-0 uninstalls are plain PackageManager state: they survive management removal and reboots, the APKs stay on `/system` (so OS security updates and a factory reset can always restore them), and your personal apps, accounts, and photos are never touched. Management then ends immediately and you can uninstall the DPC app normally afterwards.
 3. Under a **BYOD Work Profile**, it cleanly deletes only the Work container while keeping your main personal profile safe.
 
 > **OTA & Post-Deprovision Rebloat Note:** On Android 16 retail Motorola builds, clearing Device Owner reverts `setApplicationHidden()` unless packages are uninstalled for user 0 (`pm uninstall --user 0`), and a few OEM stubs (notably `com.motorola.installer` and `com.tracfone.preload.accountservices`) are framework-protected as `non-disable`. See [`docs/OTA_REBLOAT_FINDINGS.md`](docs/OTA_REBLOAT_FINDINGS.md) for the full real-hardware update timeline (`W1WEOS36.48-22-3-3-4-3` ➔ `W1WEOS36.48-22-3-3-4-7`), empirical 44/44 post-OTA persistence verification, and DNS/Device-Owner mitigation notes.

@@ -53,6 +53,19 @@ services:
       INSTALL_THINGINO: "0"
       # Set to "1" once if you edited Java/XML sources and want to recompile areole-dpc.apk.
       REBUILD_APK: "0"
+      # Public multi-user mode ("1"): anonymous session cookies (~48h), devices
+      # bound to per-QR enrollment tokens, automatic DEPROVISION_KEEP_PERSONAL
+      # on session expiry, ADB tab disabled. Leave "0" for the classic
+      # self-hosted single-tenant console. When enabling:
+      #   - Comment out `network_mode: host` and use `ports` (see below),
+      #     put your own HTTPS reverse proxy in front (it MUST forward
+      #     X-Forwarded-Proto so the session cookie gets the Secure flag), and
+      #     set AREOLE_PUBLIC_BASE_URL to your canonical https origin.
+      #   - Optional tuning read directly by server.py:
+      #     AREOLE_SESSION_TTL (hours, default 48) and
+      #     AREOLE_RETIRE_GRACE (hours after expiry before records purge, default 24).
+      ENABLE_PUBLIC: "0"
+      # AREOLE_PUBLIC_BASE_URL: "https://areole.example.com"
 
     volumes:
       # Stores keystore/ (.jks + .storepass), data/ (areole_mdm.db + areole-dpc.apk), and apps/
