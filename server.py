@@ -124,6 +124,22 @@ MOTO_BLOAT_PACKAGES = [
     "com.spotify.music",
     "com.netflix.mediaclient",
     "com.microsoft.appmanager",
+    # Additional OEM/carrier silent installers, trackers & stubs observed on Android 16 (vegas26)
+    "com.motorola.installer",
+    "com.motorola.smartfeed",
+    "com.motorola.motosignature2.app",
+    "com.meta.attribution",
+    "com.handmark.expressweather",
+    "com.inmobi.weather",
+    "com.vcast.mediamanager",
+    "com.vzw.ecid",
+    "com.att.dh",
+    "com.att.iqi",
+    "com.att.personalcloud",
+    "com.att.csoiam.mobilekey",
+    "com.cricketwireless.minus",
+    "com.cricketwireless.thescoop",
+    "com.mizmowireless.acctmgt",
 ]
 
 CORE_NOTIFICATION_EXEMPT = {

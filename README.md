@@ -242,6 +242,8 @@ Want `AreoleDPC` completely gone after your phone is debloated and tuned?
 2. Under **Device Owner**, `AreoleDPC` ensures all `UserManager` restrictions are cleared and calls `dpm.clearDeviceOwnerApp("com.areole.dpc")`. Management ends immediately—your personal apps, accounts, photos, and hidden bloatware state stay untouched, and you can uninstall the DPC app normally afterwards.
 3. Under a **BYOD Work Profile**, it cleanly deletes only the Work container while keeping your main personal profile safe.
 
+> **OTA & Post-Deprovision Rebloat Note:** On Android 16 retail Motorola builds, clearing Device Owner reverts `setApplicationHidden()` unless packages are uninstalled for user 0 (`pm uninstall --user 0`), and a few OEM stubs (notably `com.motorola.installer` and `com.tracfone.preload.accountservices`) are framework-protected as `non-disable`. See [`docs/OTA_REBLOAT_FINDINGS.md`](docs/OTA_REBLOAT_FINDINGS.md) for the full real-hardware update timeline (`W1WEOS36.48-22-3-3-4-3` ➔ `W1WEOS36.48-22-3-3-4-7`), empirical 44/44 post-OTA persistence verification, and DNS/Device-Owner mitigation notes.
+
 ---
 
 ## Sponsors & Donations
