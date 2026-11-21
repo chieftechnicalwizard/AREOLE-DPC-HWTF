@@ -33,7 +33,7 @@ LABEL org.opencontainers.image.title="AREOLE-DPC-HWTF" \
       org.opencontainers.image.version="1.0.1" \
       org.opencontainers.image.source="https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF" \
       org.opencontainers.image.url="https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.description="Self-hosted Android 6-tap QR Device Owner provisioner & debloater"
 
 ARG DEBIAN_FRONTEND=noninteractive
