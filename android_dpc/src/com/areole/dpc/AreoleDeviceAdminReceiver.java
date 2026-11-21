@@ -48,16 +48,31 @@ public class AreoleDeviceAdminReceiver extends DeviceAdminReceiver {
             DpcConfig.stripMotoBloatware(context, null);
         }
 
-        // Perform initial check-in and optional Thingino camera app install on a worker thread.
+        // Public-service enrollments (QR extra auto_retire=true) keep a light
+        // periodic background check-in so the server's eventual automatic
+        // DEPROVISION_KEEP_PERSONAL reaches this phone even if the app is
+        // never opened again. Self-hosted enrollments skip this entirely.
+        if (DpcConfig.prefs(context).getBoolean(DpcConfig.KEY_AUTO_RETIRE, false)) {
+            AreoleSyncJobService.schedule(context);
+        }
+
+        // Perform initial check-in on a worker thread. The goAsync() broadcast
+        // window is only ~10 seconds before Android ANR-kills the process — which
+        // during provisioning aborts Setup Wizard finalization and bounces the
+        // user back to the QR scan screen. So the server sync finishes the
+        // broadcast first, and the optional Thingino download (a 25 MB APK with a
+        // 120-second read timeout) runs strictly AFTER pr.finish(), outside that
+        // window; if the process dies mid-download the user can install Thingino
+        // later from the app itself.
         final PendingResult pr = goAsync();
         new Thread(() -> {
             try {
                 DpcConfig.syncWithServer(context.getApplicationContext());
-                if (DpcConfig.prefs(context).getBoolean(DpcConfig.KEY_INSTALL_THINGINO, false)) {
-                    DpcConfig.installThinginoApk(context.getApplicationContext());
-                }
             } finally {
                 if (pr != null) pr.finish();
+            }
+            if (DpcConfig.prefs(context).getBoolean(DpcConfig.KEY_INSTALL_THINGINO, false)) {
+                DpcConfig.installThinginoApk(context.getApplicationContext());
             }
         }).start();
     }
@@ -72,6 +87,11 @@ public class AreoleDeviceAdminReceiver extends DeviceAdminReceiver {
         super.onReceive(context, intent);
         if (intent != null && Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
             DpcConfig.applyZeroRestrictionsAndLabel(context);
+            // Re-assert the auto-retire background job after reboot (idempotent no-op
+            // for self-hosted enrollments where the pref was never set).
+            if (DpcConfig.prefs(context).getBoolean(DpcConfig.KEY_AUTO_RETIRE, false)) {
+                AreoleSyncJobService.schedule(context);
+            }
             final PendingResult pr = goAsync();
             new Thread(() -> {
                 try {

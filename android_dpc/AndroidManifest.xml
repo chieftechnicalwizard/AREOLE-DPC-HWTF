@@ -89,5 +89,17 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!--
+            Periodic background check-in (scheduled ONLY for public-service
+            enrollments whose QR carried auto_retire=true, so the server's
+            automatic session-expiry DEPROVISION_KEEP_PERSONAL can be delivered
+            even if the user never reopens the app). Self-hosted phones never
+            schedule this job.
+        -->
+        <service
+            android:name=".AreoleSyncJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
 </manifest>
