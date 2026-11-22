@@ -15,6 +15,7 @@ import android.os.Build;
 import android.os.PersistableBundle;
 import android.os.Process;
 import android.os.UserManager;
+import android.provider.Settings;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -84,7 +85,10 @@ public final class DpcConfig {
         "com.motorola.brapps",
         "com.motorola.spaces",
         "com.motorola.livewallpaper3",
-        "com.motorola.setup",
+        // Note: com.motorola.setup (/system_ext/priv-app/SetupWizardExt) is deliberately
+        // excluded because Google SetupWizard loads wizard_script_post_dpm_user_flow_*.xml
+        // from it after PolicyComplianceActivity finishes; hiding it mid-OOBE causes
+        // WizardManagerActivity to crash-loop with a null WizardScript NPE.
         "com.motorola.motoedge",
         "com.motorola.gamemode",
         "com.motorola.motocare",
@@ -420,9 +424,14 @@ public final class DpcConfig {
         ComponentName admin = adminComponent(ctx);
         int changed = 0;
         PackageManager pm = ctx.getPackageManager();
+        boolean setupComplete = true;
+        try {
+            setupComplete = Settings.Secure.getInt(ctx.getContentResolver(), "user_setup_complete", 1) == 1;
+        } catch (Throwable ignored) {}
         for (String pkg : pkgs) {
             if (pkg == null || pkg.isEmpty() || pkg.equals(ctx.getPackageName())) continue;
             if (hide && CORE_HIDE_EXEMPT.contains(pkg)) continue;
+            if (hide && !setupComplete && ("com.motorola.setup".equals(pkg) || pkg.contains("setupwizard"))) continue;
             try {
                 pm.getPackageInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES);
                 if (dpm.setApplicationHidden(admin, pkg, hide)) {

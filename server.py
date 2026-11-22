@@ -88,7 +88,6 @@ MOTO_BLOAT_PACKAGES = [
     "com.motorola.brapps",
     "com.motorola.spaces",
     "com.motorola.livewallpaper3",
-    "com.motorola.setup",
     "com.motorola.motoedge",
     "com.motorola.gamemode",
     "com.motorola.motocare",
