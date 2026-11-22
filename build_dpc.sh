@@ -45,19 +45,23 @@ elif [ -f "$PASS_FILE" ]; then
     KS_PASS="$(cat "$PASS_FILE")"
 else
     KS_PASS="$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))')"
-    printf '%s' "$KS_PASS" > "$PASS_FILE"
-    chmod 600 "$PASS_FILE"
+    (umask 077 && printf '%s' "$KS_PASS" > "$PASS_FILE")
 fi
+[ -f "$PASS_FILE" ] && chmod 600 "$PASS_FILE"
+
+export AREOLE_KS_PASS_TMP="$KS_PASS"
+trap 'unset AREOLE_KS_PASS_TMP' EXIT
 
 if [ ! -f "$KEYSTORE" ]; then
     echo "[*] Generating local RSA-2048 signing keystore (kept private in keystore/)..."
-    keytool -genkeypair -noprompt \
+    (umask 077 && keytool -genkeypair -noprompt \
         -keystore "$KEYSTORE" \
         -alias areole-dpc \
         -keyalg RSA -keysize 2048 -validity 10000 \
-        -storepass "$KS_PASS" -keypass "$KS_PASS" \
-        -dname "CN=AreoleDPC, OU=SelfHosted, O=Community, L=Local, ST=NA, C=US"
+        -storepass:env AREOLE_KS_PASS_TMP -keypass:env AREOLE_KS_PASS_TMP \
+        -dname "CN=AreoleDPC, OU=SelfHosted, O=Community, L=Local, ST=NA, C=US")
 fi
+chmod 600 "$KEYSTORE"
 
 rm -rf "$BUILD_DIR/obj" "$BUILD_DIR/dex" "$BUILD_DIR/gen"
 mkdir -p "$BUILD_DIR/obj" "$BUILD_DIR/dex" "$BUILD_DIR/gen"
@@ -82,8 +86,8 @@ cp "$BUILD_DIR/unaligned.apk" "$BUILD_DIR/with_dex.apk"
 "$BT_DIR/apksigner" sign \
     --ks "$KEYSTORE" \
     --ks-key-alias areole-dpc \
-    --ks-pass "pass:$KS_PASS" \
-    --key-pass "pass:$KS_PASS" \
+    --ks-pass "env:AREOLE_KS_PASS_TMP" \
+    --key-pass "env:AREOLE_KS_PASS_TMP" \
     --out "$APK_OUT" \
     "$BUILD_DIR/aligned.apk"
 

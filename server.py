@@ -42,12 +42,14 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import sqlite3
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -210,6 +212,72 @@ def resolve_cloudflared() -> str | None:
 # ---------------------------------------------------------------------------
 # APK Metadata & Android Signature Checksum Extraction
 # ---------------------------------------------------------------------------
+_MAX_BODY_BYTES = 1_000_000
+_APK_META_LOCK = threading.Lock()
+_APK_META_CACHE: tuple[tuple[str, int, int], dict[str, Any]] | None = None
+_ADB_TARGET_RE = re.compile(r"^[A-Za-z0-9.\[\]:_-]{1,128}:[0-9]{1,5}$")
+_ADB_CODE_RE = re.compile(r"^[0-9]{4,12}$")
+
+
+def _clean_str(val: Any, default: str = "", max_len: int = 128) -> str:
+    if not isinstance(val, str):
+        return default
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", "", val).strip()
+    return cleaned[:max_len] if cleaned else default
+
+
+def _sanitize_adb_username(val: Any) -> str:
+    return _clean_str(val, default="Owner", max_len=64)
+
+
+def _validate_adb_target(val: Any) -> str:
+    s = _clean_str(val, default="", max_len=140)
+    if not s or s.startswith("-") or not _ADB_TARGET_RE.match(s):
+        return ""
+    return s
+
+
+def _validate_adb_code(val: Any) -> str:
+    s = _clean_str(val, default="", max_len=16)
+    return s if _ADB_CODE_RE.match(s) else ""
+
+
+def _sanitize_checkin_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Validate and bound device check-in fields before persistence."""
+    cleaned = dict(body)
+    cleaned["device_id"] = _clean_str(body.get("device_id"), default="", max_len=128)
+    cleaned["token"] = _clean_str(body.get("token"), default="", max_len=128)
+    cleaned["username"] = _clean_str(body.get("username"), default="Owner", max_len=64)
+    cleaned["model"] = _clean_str(body.get("model"), default="Android", max_len=128)
+    cleaned["android_version"] = _clean_str(body.get("android_version"), default="?", max_len=64)
+    cleaned["role"] = _clean_str(body.get("role"), default="UNPROVISIONED", max_len=32)
+    try:
+        cleaned["hidden_count"] = max(0, min(10_000, int(body.get("hidden_count", 0))))
+    except (TypeError, ValueError):
+        cleaned["hidden_count"] = 0
+    raw_apps = body.get("installed_apps")
+    safe_apps: list[dict[str, Any]] = []
+    if isinstance(raw_apps, list):
+        for item in raw_apps[:1000]:
+            if not isinstance(item, dict):
+                continue
+            pkg = _clean_str(item.get("pkg"), default="", max_len=200)
+            if not pkg:
+                continue
+            safe_apps.append(
+                {
+                    "pkg": pkg,
+                    "label": _clean_str(item.get("label"), default=pkg, max_len=128),
+                    "system": bool(item.get("system", False)),
+                    "launcher": bool(item.get("launcher", False)),
+                    "hidden": bool(item.get("hidden", False)),
+                    "bloat_preset": bool(item.get("bloat_preset", False)),
+                }
+            )
+    cleaned["installed_apps"] = safe_apps
+    return cleaned
+
+
 def urlsafe_b64_nopad(raw: bytes) -> str:
     """Android Enterprise QR JSON expects URL-safe Base64 WITHOUT '=' padding."""
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -220,8 +288,12 @@ def compute_apk_metadata() -> dict[str, Any]:
     Compute both checksums Android ManagedProvisioning may ask for:
       - signature_checksum: SHA-256 of the APK signing certificate DER (Android 9+)
       - package_checksum:   SHA-256 of the raw APK file itself (Android 6-9 legacy)
+    Cached by (APK_PATH, mtime_ns, size) to avoid spawning apksigner on every request.
     """
-    if not APK_PATH.exists():
+    global _APK_META_CACHE
+    try:
+        st = APK_PATH.stat()
+    except OSError:
         return {
             "apk_exists": False,
             "apk_bytes": 0,
@@ -231,34 +303,41 @@ def compute_apk_metadata() -> dict[str, Any]:
             "apksigner_path": resolve_apksigner() or "(not found)",
         }
 
-    apk_bytes = APK_PATH.read_bytes()
-    pkg_sha = hashlib.sha256(apk_bytes).digest()
+    cache_key = (str(APK_PATH), st.st_mtime_ns, st.st_size)
+    with _APK_META_LOCK:
+        if _APK_META_CACHE is not None and _APK_META_CACHE[0] == cache_key:
+            return dict(_APK_META_CACHE[1])
 
-    sig_checksum = ""
-    apksigner = resolve_apksigner()
-    if apksigner:
-        try:
-            proc = subprocess.run(
-                [apksigner, "verify", "--print-certs", str(APK_PATH)],
-                capture_output=True,
-                text=True,
-                timeout=12,
-                check=False,
-            )
-            m = re.search(r"Signer #1 certificate SHA-256 digest:\s*([0-9a-fA-F]{64})", proc.stdout)
-            if m:
-                sig_checksum = urlsafe_b64_nopad(bytes.fromhex(m.group(1)))
-        except Exception:
-            pass
+        apk_bytes = APK_PATH.read_bytes()
+        pkg_sha = hashlib.sha256(apk_bytes).digest()
 
-    return {
-        "apk_exists": True,
-        "apk_bytes": len(apk_bytes),
-        "signature_checksum": sig_checksum,
-        "package_checksum": urlsafe_b64_nopad(pkg_sha),
-        "admin_component": ADMIN_COMPONENT,
-        "apksigner_path": apksigner or "(not found)",
-    }
+        sig_checksum = ""
+        apksigner = resolve_apksigner()
+        if apksigner:
+            try:
+                proc = subprocess.run(
+                    [apksigner, "verify", "--print-certs", str(APK_PATH)],
+                    capture_output=True,
+                    text=True,
+                    timeout=12,
+                    check=False,
+                )
+                m = re.search(r"Signer #1 certificate SHA-256 digest:\s*([0-9a-fA-F]{64})", proc.stdout)
+                if m:
+                    sig_checksum = urlsafe_b64_nopad(bytes.fromhex(m.group(1)))
+            except Exception:
+                pass
+
+        meta = {
+            "apk_exists": True,
+            "apk_bytes": len(apk_bytes),
+            "signature_checksum": sig_checksum,
+            "package_checksum": urlsafe_b64_nopad(pkg_sha),
+            "admin_component": ADMIN_COMPONENT,
+            "apksigner_path": apksigner or "(not found)",
+        }
+        _APK_META_CACHE = (cache_key, meta)
+        return dict(meta)
 
 
 _THINGINO_LOCK = threading.Lock()
@@ -640,6 +719,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(f"[areole-dpc] {self.address_string()} - {fmt % args}\n")
 
+    def _send_security_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+
+    def _check_body_length(self) -> bool:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._send_json({"error": "Invalid Content-Length"}, 400)
+            return False
+        if length < 0:
+            self._send_json({"error": "Invalid Content-Length"}, 400)
+            return False
+        if length > _MAX_BODY_BYTES:
+            self._send_json({"error": "Request body too large"}, 413)
+            return False
+        return True
+
+    def _check_admin_csrf(self) -> bool:
+        """Require JSON Content-Type and matching Origin (when present) on admin POSTs."""
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if ctype != "application/json":
+            self._send_json({"error": "Content-Type must be application/json"}, 415)
+            return False
+        origin = (self.headers.get("Origin") or "").strip()
+        if origin:
+            host = (self.headers.get("Host") or "").strip().lower()
+            origin_netloc = urllib.parse.urlparse(origin).netloc.lower()
+            if not origin_netloc or (host and origin_netloc != host):
+                self._send_json({"error": "Cross-origin request rejected"}, 403)
+                return False
+        return True
+
     def _is_public_tunnel(self) -> bool:
         """
         Detect whether a request entered via Cloudflare Quick Tunnel rather than
@@ -655,6 +768,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _send_json(self, obj: Any, status: int = 200) -> None:
         raw = json.dumps(obj, indent=2).encode("utf-8")
         self.send_response(status)
+        self._send_security_headers()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
@@ -667,6 +781,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         size = path.stat().st_size
         self.send_response(200)
+        self._send_security_headers()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(size))
         self.send_header("Cache-Control", "no-store")
@@ -721,6 +836,7 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
 <p style='font-size:13px;color:#94a3b8'>After installing AreoleDPC, open it to manage bloatware or trigger non-destructive deprovisioning anytime.</p>
 </body></html>""".encode("utf-8")
             self.send_response(200)
+            self._send_security_headers()
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(page)))
             self.end_headers()
@@ -758,6 +874,8 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
         self._send_json({"error": "Not found"}, 404)
 
     def do_POST(self) -> None:
+        if not self._check_body_length():
+            return
         path = self.path.split("?", 1)[0]
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -766,6 +884,11 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
         except Exception:
             self._send_json({"error": "Invalid JSON body"}, 400)
             return
+        if not isinstance(body, dict):
+            self._send_json({"error": "JSON object required"}, 400)
+            return
+        if path == "/api/device/checkin":
+            body = _sanitize_checkin_body(body)
 
         # Allowed over tunnel & LAN so enrolled devices report inventory cleanly
         if path == "/api/device/checkin":
@@ -777,6 +900,9 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
 
         if self._is_public_tunnel():
             self._send_json({"error": "Admin API disabled on public tunnel"}, 403)
+            return
+
+        if not self._check_admin_csrf():
             return
 
         if path == "/api/qr":
@@ -806,14 +932,14 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
 
         if path == "/api/adb/action":
             action = body.get("action", "")
-            username = (body.get("username") or "Owner").strip() or "Owner"
+            username = _sanitize_adb_username(body.get("username"))
             logs: list[str] = []
 
             if action == "adb_pair":
-                target = (body.get("pair_target") or "").strip()
-                code = (body.get("pair_code") or "").strip()
+                target = _validate_adb_target(body.get("pair_target"))
+                code = _validate_adb_code(body.get("pair_code"))
                 if not target or not code:
-                    self._send_json({"ok": False, "logs": ["Enter IP:PairingPort and 6-digit pairing code."]}, 400)
+                    self._send_json({"ok": False, "logs": ["Enter a valid IP:PairingPort and numeric pairing code."]}, 400)
                     return
                 rc, o, e = run_adb(["pair", target, code], timeout=20)
                 logs.append(f"adb pair {target} -> rc={rc} {o} {e}")
@@ -821,9 +947,9 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
                 return
 
             if action == "adb_connect":
-                target = (body.get("connect_target") or "").strip()
+                target = _validate_adb_target(body.get("connect_target"))
                 if not target:
-                    self._send_json({"ok": False, "logs": ["Enter IP:Port to connect."]}, 400)
+                    self._send_json({"ok": False, "logs": ["Enter a valid IP:Port to connect."]}, 400)
                     return
                 rc, o, e = run_adb(["connect", target], timeout=15)
                 logs.append(f"adb connect {target} -> rc={rc} {o} {e}")
@@ -840,7 +966,7 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
                 for cmd in (
                     ["shell", "settings", "put", "global", "adb_enabled", "1"],
                     ["shell", "settings", "put", "global", "development_settings_enabled", "1"],
-                    ["shell", "settings", "put", "global", "device_name", username],
+                    ["shell", "settings", "put", "global", "device_name", shlex.quote(username)],
                 ):
                     rc, o, e = run_adb(cmd, serial)
                     logs.append(f"{' '.join(cmd)} -> rc={rc} {o} {e}")
@@ -883,7 +1009,7 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
                 else:
                     rc, o, e = run_adb(["install", "-r", "-t", str(APK_PATH)], serial, timeout=25)
                     logs.append(f"install -> rc={rc} {o} {e}")
-                    rc2, o2, e2 = run_adb(["shell", "pm", "create-user", "--profileOf", "0", "--managed", username], serial, timeout=15)
+                    rc2, o2, e2 = run_adb(["shell", "pm", "create-user", "--profileOf", "0", "--managed", shlex.quote(username)], serial, timeout=15)
                     logs.append(f"create-user -> rc={rc2} {o2} {e2}")
                     m = re.search(r"id\s+(\d+)", o2)
                     if m:

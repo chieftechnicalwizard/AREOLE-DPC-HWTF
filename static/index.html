@@ -288,28 +288,73 @@ async function loadStatus() {
   const tb = document.getElementById("devicesBody");
   tb.innerHTML = "";
   if (!(statusData.devices || []).length) {
-    tb.innerHTML = "<tr><td colspan='7' style='color:#94a3b8'>No devices checked in yet. Scan QR or install /setup APK.</td></tr>";
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 7;
+    td.style.color = "#94a3b8";
+    td.textContent = "No devices checked in yet. Scan QR or install /setup APK.";
+    tr.appendChild(td);
+    tb.appendChild(tr);
   } else {
     statusData.devices.forEach(d => {
       const tr = document.createElement("tr");
-      const age = Math.max(0, Math.round(Date.now()/1000 - d.last_seen));
-      tr.innerHTML = `
-        <td><code>${d.device_id}</code></td>
-        <td>${d.model}<br/><span style="color:#94a3b8;font-size:11px">Android ${d.android_version}</span></td>
-        <td>${d.username}</td>
-        <td><b>${d.role}</b></td>
-        <td>${d.hidden_count} pkgs</td>
-        <td>${age}s ago</td>
-        <td>
-          <div class="btn-row" style="margin:0;">
-            <button class="btn ghost" onclick="openAppsDrawer('${d.device_id}')">Apps (${(d.installed_apps||[]).length})</button>
-            <button class="btn ghost" onclick="sendCmd('${d.device_id}','STRIP_BLOATWARE')">Debloat</button>
-            <button class="btn ghost" onclick="sendCmd('${d.device_id}','MUTE_NOTIFICATIONS')">Mute Notifs</button>
-            <button class="btn ghost" onclick="sendCmd('${d.device_id}','INSTALL_THINGINO')">Install Thingino</button>
-            <button class="btn red" onclick="sendCmd('${d.device_id}','DEPROVISION_KEEP_PERSONAL')">Deprovision (Keep Data)</button>
-            <button class="btn ghost" onclick="delDev('${d.device_id}')">Remove Row</button>
-          </div>
-        </td>`;
+      const age = Math.max(0, Math.round(Date.now()/1000 - (Number(d.last_seen) || 0)));
+      const devId = String(d.device_id || "");
+
+      const tdId = document.createElement("td");
+      const codeId = document.createElement("code");
+      codeId.textContent = devId;
+      tdId.appendChild(codeId);
+      tr.appendChild(tdId);
+
+      const tdModel = document.createElement("td");
+      tdModel.appendChild(document.createTextNode(String(d.model || "")));
+      tdModel.appendChild(document.createElement("br"));
+      const spVer = document.createElement("span");
+      spVer.style.color = "#94a3b8";
+      spVer.style.fontSize = "11px";
+      spVer.textContent = "Android " + String(d.android_version || "");
+      tdModel.appendChild(spVer);
+      tr.appendChild(tdModel);
+
+      const tdUser = document.createElement("td");
+      tdUser.textContent = String(d.username || "");
+      tr.appendChild(tdUser);
+
+      const tdRole = document.createElement("td");
+      const bRole = document.createElement("b");
+      bRole.textContent = String(d.role || "");
+      tdRole.appendChild(bRole);
+      tr.appendChild(tdRole);
+
+      const tdHidden = document.createElement("td");
+      tdHidden.textContent = `${Number(d.hidden_count) || 0} pkgs`;
+      tr.appendChild(tdHidden);
+
+      const tdAge = document.createElement("td");
+      tdAge.textContent = `${age}s ago`;
+      tr.appendChild(tdAge);
+
+      const tdAct = document.createElement("td");
+      const row = document.createElement("div");
+      row.className = "btn-row";
+      row.style.margin = "0";
+      const addBtn = (label, cls, fn) => {
+        const b = document.createElement("button");
+        b.className = cls;
+        b.textContent = label;
+        b.addEventListener("click", fn);
+        row.appendChild(b);
+      };
+      addBtn(`Apps (${(d.installed_apps||[]).length})`, "btn ghost", () => openAppsDrawer(devId));
+      addBtn("Debloat", "btn ghost", () => sendCmd(devId, "STRIP_BLOATWARE"));
+      addBtn("Mute Notifs", "btn ghost", () => sendCmd(devId, "MUTE_NOTIFICATIONS"));
+      addBtn("Install Thingino", "btn ghost", () => sendCmd(devId, "INSTALL_THINGINO"));
+      addBtn("Deprovision (Keep Data)", "btn red", () => sendCmd(devId, "DEPROVISION_KEEP_PERSONAL"));
+      addBtn("Remove Row", "btn ghost", () => delDev(devId));
+      tdAct.appendChild(row);
+      tr.appendChild(tdAct);
+
       tb.appendChild(tr);
     });
   }
@@ -334,18 +379,49 @@ function renderAppsDrawer() {
     !q || (a.label || "").toLowerCase().includes(q) || (a.pkg || "").toLowerCase().includes(q)
   );
   if (!apps.length) {
-    body.innerHTML = "<tr><td colspan='5' style='color:#94a3b8'>No app inventory reported yet. Open AreoleDPC on the phone to sync.</td></tr>";
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    td.style.color = "#94a3b8";
+    td.textContent = "No app inventory reported yet. Open AreoleDPC on the phone to sync.";
+    tr.appendChild(td);
+    body.appendChild(tr);
     return;
   }
   apps.sort((a, b) => (a.hidden === b.hidden ? (a.label || a.pkg).localeCompare(b.label || b.pkg) : (a.hidden ? 1 : -1)));
   apps.forEach(a => {
     const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td><input type="checkbox" class="appChk" value="${a.pkg}" style="width:auto" /></td>
-      <td>${a.label || ""}</td>
-      <td><code>${a.pkg}</code></td>
-      <td>${a.system ? "System" : "User"}${a.launcher ? " · Launcher" : ""}</td>
-      <td>${a.hidden ? '<span style="color:#f59e0b">Hidden</span>' : '<span style="color:#14b8a6">Visible</span>'}</td>`;
+
+    const tdChk = document.createElement("td");
+    const chk = document.createElement("input");
+    chk.type = "checkbox";
+    chk.className = "appChk";
+    chk.value = String(a.pkg || "");
+    chk.style.width = "auto";
+    tdChk.appendChild(chk);
+    tr.appendChild(tdChk);
+
+    const tdLabel = document.createElement("td");
+    tdLabel.textContent = String(a.label || "");
+    tr.appendChild(tdLabel);
+
+    const tdPkg = document.createElement("td");
+    const codePkg = document.createElement("code");
+    codePkg.textContent = String(a.pkg || "");
+    tdPkg.appendChild(codePkg);
+    tr.appendChild(tdPkg);
+
+    const tdType = document.createElement("td");
+    tdType.textContent = (a.system ? "System" : "User") + (a.launcher ? " · Launcher" : "");
+    tr.appendChild(tdType);
+
+    const tdState = document.createElement("td");
+    const spState = document.createElement("span");
+    spState.style.color = a.hidden ? "#f59e0b" : "#14b8a6";
+    spState.textContent = a.hidden ? "Hidden" : "Visible";
+    tdState.appendChild(spState);
+    tr.appendChild(tdState);
+
     body.appendChild(tr);
   });
 }
@@ -358,10 +434,15 @@ async function applySelectedApps(action) {
   if (!drawerDeviceId) return;
   const pkgs = Array.from(document.querySelectorAll(".appChk:checked")).map(c => c.value);
   if (!pkgs.length) return alert("Select one or more apps first.");
-  await fetch("/api/device/command", {
+  const r = await fetch("/api/device/command", {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({device_id: drawerDeviceId, action, payload: {packages: pkgs}})
   });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    alert(`Failed (${r.status}): ${j.error || "Request rejected"}`);
+    return;
+  }
   alert(`Queued ${action} for ${pkgs.length} packages on ${drawerDeviceId}.`);
 }
 
@@ -390,35 +471,77 @@ async function refreshQR() {
 }
 
 async function sendCmd(device_id, action) {
-  await fetch("/api/device/command", {
+  const r = await fetch("/api/device/command", {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({device_id, action})
   });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    alert(`Failed (${r.status}): ${j.error || "Request rejected"}`);
+    return;
+  }
   alert(`Queued ${action} for ${device_id}. Device executes on next poll (~15s).`);
 }
 
 async function delDev(device_id) {
-  await fetch("/api/device/delete", {
+  const r = await fetch("/api/device/delete", {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({device_id})
   });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    alert(`Failed (${r.status}): ${j.error || "Request rejected"}`);
+    return;
+  }
   loadStatus();
 }
 
 async function loadAdb() {
   const r = await fetch("/api/adb/status");
-  const j = await r.json();
+  const j = await r.json().catch(() => ({}));
   const el = document.getElementById("adbStatus");
-  if (!j.devices || !j.devices.length) {
-    el.innerHTML = `<div class="warn">No ADB device detected yet (ADB binary: <code>${j.adb_path || 'missing'}</code>). Plug in USB with Debugging enabled or pair Wireless Debugging above.</div>`;
+  el.innerHTML = "";
+  if (!r.ok) {
+    const w = document.createElement("div");
+    w.className = "warn";
+    w.textContent = j.error || `ADB status unavailable (HTTP ${r.status})`;
+    el.appendChild(w);
     return;
   }
-  el.innerHTML = j.devices.map(d => `
-    <div class="note">
-      <b>${d.serial}</b> (${d.state}) — <b>${d.model}</b> | Android ${d.android}<br/>
-      Users: <code>${(d.users||[]).join(" | ")}</code><br/>
-      Preset bloatware active on User 0: <code>${(d.bloat_present||[]).length} packages</code>
-    </div>`).join("");
+  if (!j.devices || !j.devices.length) {
+    const w = document.createElement("div");
+    w.className = "warn";
+    w.appendChild(document.createTextNode("No ADB device detected yet (ADB binary: "));
+    const c = document.createElement("code");
+    c.textContent = j.adb_path || "missing";
+    w.appendChild(c);
+    w.appendChild(document.createTextNode("). Plug in USB with Debugging enabled or pair Wireless Debugging above."));
+    el.appendChild(w);
+    return;
+  }
+  j.devices.forEach(d => {
+    const box = document.createElement("div");
+    box.className = "note";
+    const bSer = document.createElement("b");
+    bSer.textContent = String(d.serial || "");
+    box.appendChild(bSer);
+    box.appendChild(document.createTextNode(` (${String(d.state || "")}) — `));
+    const bMod = document.createElement("b");
+    bMod.textContent = String(d.model || "");
+    box.appendChild(bMod);
+    box.appendChild(document.createTextNode(` | Android ${String(d.android || "")}`));
+    box.appendChild(document.createElement("br"));
+    box.appendChild(document.createTextNode("Users: "));
+    const cUsers = document.createElement("code");
+    cUsers.textContent = (d.users || []).join(" | ");
+    box.appendChild(cUsers);
+    box.appendChild(document.createElement("br"));
+    box.appendChild(document.createTextNode("Preset bloatware active on User 0: "));
+    const cBloat = document.createElement("code");
+    cBloat.textContent = `${(d.bloat_present || []).length} packages`;
+    box.appendChild(cBloat);
+    el.appendChild(box);
+  });
 }
 
 async function adbPair() {

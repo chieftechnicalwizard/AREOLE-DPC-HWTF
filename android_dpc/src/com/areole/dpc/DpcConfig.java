@@ -22,6 +22,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -161,6 +162,21 @@ public final class DpcConfig {
         "com.android.vending"
     ));
 
+    /** Pinned SHA-256 digest of the official Thingino v0.6.0 APK (verified on-device before commit). */
+    public static final String THINGINO_APK_SHA256 =
+        "bf4e9181d282f595dd40caf0a8d8b26d16f34135ab96e8acc87f89fde96a81af";
+    private static final long THINGINO_MAX_BYTES = 64L * 1024L * 1024L;
+
+    /** Critical OS packages that must never be hidden via setPackagesHidden(..., true). */
+    public static final Set<String> CORE_HIDE_EXEMPT = new HashSet<>(Arrays.asList(
+        "android",
+        "com.android.systemui",
+        "com.android.settings",
+        "com.android.phone",
+        "com.android.server.telecom",
+        "com.android.providers.settings"
+    ));
+
     private DpcConfig() {}
 
     public static SharedPreferences prefs(Context ctx) {
@@ -171,12 +187,12 @@ public final class DpcConfig {
         return new ComponentName(ctx, AreoleDeviceAdminReceiver.class);
     }
 
-    public static String ensureDeviceId(Context ctx) {
+    public static synchronized String ensureDeviceId(Context ctx) {
         SharedPreferences p = prefs(ctx);
         String id = p.getString(KEY_DEVICE_ID, "");
         if (id == null || id.isEmpty()) {
             id = Build.MODEL.replaceAll("[^A-Za-z0-9]", "") + "-" + UUID.randomUUID().toString().substring(0, 8);
-            p.edit().putString(KEY_DEVICE_ID, id).apply();
+            p.edit().putString(KEY_DEVICE_ID, id).commit();
         }
         return id;
     }
@@ -237,6 +253,9 @@ public final class DpcConfig {
                 return "Thingino download HTTP " + code;
             }
             long contentLength = conn.getContentLengthLong();
+            if (contentLength > THINGINO_MAX_BYTES) {
+                return "Thingino APK exceeds size limit (" + contentLength + " bytes)";
+            }
 
             PackageInstaller installer = ctx.getPackageManager().getPackageInstaller();
             PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
@@ -245,22 +264,45 @@ public final class DpcConfig {
                 params.setSize(contentLength);
             }
             int sessionId = installer.createSession(params);
+            boolean committed = false;
             try (PackageInstaller.Session session = installer.openSession(sessionId)) {
+                MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+                long totalRead = 0L;
                 try (InputStream in = conn.getInputStream();
                      OutputStream out = session.openWrite("thingino.apk", 0, contentLength > 0 ? contentLength : -1)) {
                     byte[] buf = new byte[16384];
                     int n;
                     while ((n = in.read(buf)) > 0) {
+                        totalRead += n;
+                        if (totalRead > THINGINO_MAX_BYTES) {
+                            session.abandon();
+                            return "Thingino APK exceeded 64 MB limit — install aborted";
+                        }
+                        sha256.update(buf, 0, n);
                         out.write(buf, 0, n);
                     }
                     session.fsync(out);
+                }
+                StringBuilder hex = new StringBuilder(64);
+                for (byte b : sha256.digest()) {
+                    hex.append(String.format("%02x", b & 0xff));
+                }
+                if (!THINGINO_APK_SHA256.equalsIgnoreCase(hex.toString())) {
+                    session.abandon();
+                    return "Thingino SHA-256 mismatch — install aborted";
                 }
                 Intent intent = new Intent(ctx, AreoleDeviceAdminReceiver.class);
                 intent.setAction("com.areole.dpc.INSTALL_COMPLETE");
                 int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
                 PendingIntent pi = PendingIntent.getBroadcast(ctx, 4201, intent, flags);
                 session.commit(pi.getIntentSender());
-                return "Committed Thingino APK install session";
+                committed = true;
+                return "Committed Thingino APK install session (SHA-256 verified)";
+            } catch (Throwable t) {
+                if (!committed) {
+                    try { installer.abandonSession(sessionId); } catch (Throwable ignored) {}
+                }
+                throw t;
             }
         } catch (Throwable t) {
             return "Thingino install failed: " + t.getMessage();
@@ -380,6 +422,7 @@ public final class DpcConfig {
         PackageManager pm = ctx.getPackageManager();
         for (String pkg : pkgs) {
             if (pkg == null || pkg.isEmpty() || pkg.equals(ctx.getPackageName())) continue;
+            if (hide && CORE_HIDE_EXEMPT.contains(pkg)) continue;
             try {
                 pm.getPackageInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES);
                 if (dpm.setApplicationHidden(admin, pkg, hide)) {
@@ -488,6 +531,7 @@ public final class DpcConfig {
         }
         String base = serverUrl.endsWith("/") ? serverUrl.substring(0, serverUrl.length() - 1) : serverUrl;
         String devId = ensureDeviceId(ctx);
+        HttpURLConnection conn = null;
         try {
             JSONObject payload = new JSONObject();
             payload.put("device_id", devId);
@@ -500,7 +544,7 @@ public final class DpcConfig {
             payload.put("hidden_count", prefs(ctx).getInt(KEY_HIDDEN_COUNT, 0));
             payload.put("installed_apps", collectAppInventory(ctx));
 
-            HttpURLConnection conn = (HttpURLConnection) new URL(base + "/api/device/checkin").openConnection();
+            conn = (HttpURLConnection) new URL(base + "/api/device/checkin").openConnection();
             conn.setRequestMethod("POST");
             conn.setConnectTimeout(6000);
             conn.setReadTimeout(6000);
@@ -512,10 +556,12 @@ public final class DpcConfig {
             }
             int code = conn.getResponseCode();
             StringBuilder sb = new StringBuilder();
-            try (BufferedReader br = new BufferedReader(new InputStreamReader(
-                    code < 400 ? conn.getInputStream() : conn.getErrorStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = br.readLine()) != null) sb.append(line);
+            InputStream stream = code < 400 ? conn.getInputStream() : conn.getErrorStream();
+            if (stream != null) {
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = br.readLine()) != null) sb.append(line);
+                }
             }
             if (code >= 400) return "HTTP " + code;
 
@@ -557,6 +603,8 @@ public final class DpcConfig {
             return actionNote;
         } catch (Throwable t) {
             return "Sync error: " + t.getMessage();
+        } finally {
+            if (conn != null) conn.disconnect();
         }
     }
 }
