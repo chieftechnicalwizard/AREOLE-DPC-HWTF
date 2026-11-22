@@ -180,7 +180,14 @@ docker run -d --name areole-dpc \
    - Tap empty background space on that Welcome screen **6 times rapidly** until the QR reader opens.
    - Point the phone at the QR code on your computer monitor.
 3. **Watch the Provisioning Handshake Finish**
-   - Android joins Wi-Fi, downloads `areole-dpc.apk` over HTTPS, verifies the `PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM`, creates Device Owner scope, applies bloat-hiding + notification silence, and returns to the desktop ready to use!
+   - Android joins Wi-Fi, downloads `areole-dpc.apk` over HTTPS, verifies the `PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM`, creates Device Owner scope, applies bloat-hiding + notification silence, and walks cleanly through consent → OEM privacy → Google Services straight to the home screen:
+
+| 1. Accept Device Owner | 2. OEM Privacy & Telemetry | 3. Google Services | 4. Enrolled & Debloated (`v1.0.2`) |
+| :---: | :---: | :---: | :---: |
+| ![Accept Device Owner](docs/screenshots/01_accept_device_owner.jpg) | ![Motorola Privacy & Security](docs/screenshots/02_moto_privacy_security.jpg) | ![Google Services](docs/screenshots/03_google_services.jpg) | ![AreoleDPC Enrolled](docs/screenshots/04_areole_dpc_enrolled.png) |
+
+   *(Real hardware capture on a factory-reset Moto G Power 2026 / Android 16 — `DEVICE_OWNER` bound with `0` restrictions, `39` bloat packages hidden on first boot, and zero Setup Wizard crashes.)*
+
 4. **Already Set Up Without Factory Resetting? (ADB & BYOD Modes)**
    - Visit `<server_url>/setup` on your phone browser to install `areole-dpc.apk` and create a removable **Work Profile**, OR plug in USB / pair **Wireless Debugging** in Tab 3 (`USB / Wireless ADB Control`) to run one-click user-0 debloating, notification muting, or optional Thingino installation without resetting at all.
 

@@ -44,10 +44,18 @@ public class MainActivity extends Activity {
 
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(Color.parseColor("#0F172A"));
+        scroll.setFitsSystemWindows(true);
+        scroll.setClipToPadding(false);
+        scroll.setOnApplyWindowInsetsListener((v, insets) -> {
+            int top = insets.getSystemWindowInsetTop();
+            int bottom = insets.getSystemWindowInsetBottom();
+            v.setPadding(0, top, 0, bottom);
+            return insets;
+        });
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(40, 56, 40, 56);
+        root.setPadding(40, 48, 40, 56);
         scroll.addView(root);
 
         TextView title = new TextView(this);
