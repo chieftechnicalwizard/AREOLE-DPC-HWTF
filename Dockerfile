@@ -104,7 +104,8 @@ ENV AREOLE_MDM_HOST=0.0.0.0 \
     AREOLE_APK_PATH=/var/lib/areole/data/areole-dpc.apk \
     ENABLE_TUNNEL=1 \
     INSTALL_THINGINO=0 \
-    REBUILD_APK=0
+    REBUILD_APK=0 \
+    ENABLE_PUBLIC=0
 
 VOLUME ["/var/lib/areole"]
 EXPOSE 8780

@@ -2,9 +2,11 @@ package com.areole.dpc;
 
 import android.app.PendingIntent;
 import android.app.admin.DevicePolicyManager;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
@@ -31,6 +33,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -64,6 +68,7 @@ public final class DpcConfig {
     public static final String KEY_STRIP_BLOAT = "strip_bloatware";
     public static final String KEY_NOTIF_OFF = "notifications_off_default";
     public static final String KEY_INSTALL_THINGINO = "install_thingino";
+    public static final String KEY_AUTO_RETIRE = "auto_retire";
     public static final String KEY_HIDDEN_COUNT = "hidden_count";
     public static final String KEY_LAST_SYNC = "last_sync";
 
@@ -105,13 +110,20 @@ public final class DpcConfig {
         "com.aura.oobe.motorola",
         "com.dti.motorola",
         "com.dti.tracfone",
+        "com.dti.folderlauncher",
         "com.ironsource.appcloud.oobe",
         "com.LogiaGroup.LogiaDeck",
         "com.motorola.infolife.mobile.services",
         "com.tracfone.generic.mysiteaccount",
+        "com.tracfone.generic.mysites",
         "com.tracfone.preload.accountservices",
+        "com.swishme.tracfone",
+        "com.motorola.tracfone.rsu",
+        "com.motorola.tracfone.setup",
         "com.vzw.hss.myverizon",
         "com.verizon.mips.services",
+        "com.securityandprivacy.android.verizon.vms",
+        "com.aura.jet.att",
         "com.amazon.mShop.android.shopping",
         "com.amazon.appmanager",
         "com.booking",
@@ -239,6 +251,14 @@ public final class DpcConfig {
         }
         if (extras.containsKey("install_thingino")) {
             ed.putBoolean(KEY_INSTALL_THINGINO, extras.getBoolean("install_thingino", false));
+        }
+        if (extras.containsKey("auto_retire")) {
+            // Public-service enrollments set this so the phone keeps a light
+            // background check-in going (AreoleSyncJobService) and can receive
+            // the server's automatic DEPROVISION_KEEP_PERSONAL after session
+            // expiry. Self-hosted QRs never set it — their traffic pattern is
+            // unchanged (sync only at provisioning, boot, or open app).
+            ed.putBoolean(KEY_AUTO_RETIRE, extras.getBoolean("auto_retire", false));
         }
         ed.apply();
     }
@@ -593,9 +613,132 @@ public final class DpcConfig {
     }
 
     /**
+     * Converts packages currently hidden via setApplicationHidden() into permanent
+     * user-0 uninstalls, right before management is removed.
+     *
+     * WHY THIS MATTERS: Android RESTORES every app an admin hid with
+     * setApplicationHidden() the moment that admin is removed — which would
+     * silently undo the entire debloat at the exact moment the user wants to
+     * "remove the corporate stuff and keep the clean phone". A user-0 uninstall
+     * is plain PackageManager state (identical to the ADB path's
+     * `pm uninstall -k --user 0`): it survives management removal, reboots, and
+     * app drawer refreshes, while the APK stays on /system so a factory reset
+     * can always bring the packages back and OS updates are unaffected.
+     *
+     * Scope: everything THIS admin hid (the bloat preset plus any apps the user
+     * hid via the dashboard drawer). Note PackageInstaller.uninstall() removes
+     * app data for those bloat packages — they are carrier/OEM junk the user
+     * explicitly chose to remove, and "keep personal" applies to the user's own
+     * apps, accounts, photos, and settings, which are never touched here.
+     */
+    private static int persistHiddenAsUninstalled(Context ctx, DevicePolicyManager dpm, ComponentName admin) {
+        PackageManager pm = ctx.getPackageManager();
+        PackageInstaller installer = pm.getPackageInstaller();
+
+        // Targets: ONLY the packages THIS admin currently has hidden — found by
+        // scanning installed packages for the hidden (uninstalled-for-user) state,
+        // which MATCH_UNINSTALLED_PACKAGES exposes. This covers preset packages
+        // hidden at enrollment AND apps the user hid via the dashboard drawer,
+        // while honoring anything they deliberately unhid or never checked —
+        // seeding with the raw preset here would force-uninstall packages the
+        // user chose to keep.
+        Set<String> targets = new HashSet<>();
+        try {
+            List<PackageInfo> installed = pm.getInstalledPackages(PackageManager.MATCH_UNINSTALLED_PACKAGES);
+            for (PackageInfo pi : installed) {
+                if (pi == null || pi.packageName == null) continue;
+                try {
+                    if (dpm.isApplicationHidden(admin, pi.packageName)) {
+                        targets.add(pi.packageName);
+                    }
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
+        if (targets.isEmpty()) return 0;
+
+        // Real PendingIntent (NOT null): AOSP's uninstall() overload requires a
+        // non-null statusReceiver on some Android builds/OEM skins — passing null
+        // throws NPE there, which would silently skip the whole conversion. Each
+        // session reports completion to AreoleDeviceAdminReceiver (action below),
+        // and we wait briefly so the uninstall sessions SETTLE BEFORE the caller
+        // clears Device Owner: the silent-uninstall right belongs to the owner,
+        // and clearDeviceOwnerApp() mid-session can reject in-flight sessions.
+        // (The unhide-first ordering below additionally guarantees correctness
+        // even if this wait times out: no hidden state remains for the owner-
+        // removal revert to reinstate.)
+        final CountDownLatch settled = new CountDownLatch(targets.size());
+        final BroadcastReceiver reporter = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                settled.countDown();
+            }
+        };
+        final IntentFilter reportFilter = new IntentFilter("com.areole.dpc.UNINSTALL_COMPLETE");
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                ctx.registerReceiver(reporter, reportFilter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                ctx.registerReceiver(reporter, reportFilter);
+            }
+        } catch (Throwable ignored) {}
+
+        int committed = 0;
+        for (String pkg : targets) {
+            if (pkg == null || pkg.equals(ctx.getPackageName())) continue;
+            // Unhide FIRST, then uninstall: clearDeviceOwnerApp() reverts ALL
+            // setApplicationHidden state and unhiding a package REINSTALLS it
+            // for user 0 — on-device testing showed packages whose uninstall
+            // session was still pending at owner-removal came straight back.
+            // With no hidden-by-admin state left for a package, the revert has
+            // nothing to restore.
+            try {
+                dpm.setApplicationHidden(admin, pkg, false);
+            } catch (Throwable ignored) {}
+            boolean fired = false;
+            try {
+                // Package-scoped IMPLICIT intent, not an explicit component one:
+                // the status receiver is a dynamically registered receiver, and
+                // Android delivers explicit-component broadcasts only to the
+                // manifest component — the latch would never count down and
+                // deprovision would always burn the full wait timeout.
+                // .setPackage() scopes the action to this app so no other app
+                // can spoof completion callbacks.
+                Intent intent = new Intent("com.areole.dpc.UNINSTALL_COMPLETE")
+                    .setPackage(ctx.getPackageName());
+                // FLAG_MUTABLE (not IMMUTABLE): PackageInstaller appends the
+                // status extras via a fill-in intent, which immutable
+                // PendingIntents reject.
+                int flags = PendingIntent.FLAG_UPDATE_CURRENT
+                    | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
+                PendingIntent result = PendingIntent.getBroadcast(ctx, 4300 + committed, intent, flags);
+                installer.uninstall(pkg, result.getIntentSender()); // device owner: silent uninstall for user 0
+                committed++;
+                fired = true;
+            } catch (Throwable ignored) {}
+            if (!fired) {
+                settled.countDown(); // no session will report for this one
+            }
+        }
+        try {
+            // Cap the wait: unhide-first already guarantees the end state, this
+            // just maximizes how many uninstall sessions finish while we are
+            // still the (owner-authorized) caller. Runs off the main thread.
+            settled.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            try {
+                ctx.unregisterReceiver(reporter);
+            } catch (Throwable ignored) {}
+        }
+        return committed;
+    }
+
+    /**
      * Clean, non-destructive unenrollment:
-     *   - Under DEVICE_OWNER: clears Device Owner directly while keeping all user files,
-     *     apps, accounts, and debloated hidden state intact!
+     *   - Under DEVICE_OWNER: first converts hidden bloat into permanent user-0
+     *     uninstalls (so the debloat survives the management removal), then clears
+     *     Device Owner while keeping all user files, apps, accounts, and settings.
      *   - Under WORK_PROFILE: removes only the managed profile container.
      */
     public static String deprovisionKeepPersonal(Context ctx) {
@@ -603,10 +746,17 @@ public final class DpcConfig {
         if (dpm == null) return "DPM unavailable";
         String pkg = ctx.getPackageName();
         String role = managementRole(ctx);
+        // Management is ending on purpose: stop any auto-retire background sync job.
+        AreoleSyncJobService.cancel(ctx);
         if ("DEVICE_OWNER".equals(role)) {
             applyZeroRestrictionsAndLabel(ctx);
+            // Convert hidden bloat to permanent user-0 uninstalls BEFORE the owner
+            // is cleared — Android would otherwise restore every hidden app the
+            // moment this admin disappears, undoing the debloat.
+            int keptGone = persistHiddenAsUninstalled(ctx, dpm, adminComponent(ctx));
             dpm.clearDeviceOwnerApp(pkg);
-            return "Cleared Device Owner cleanly (Personal profile kept intact).";
+            return "Cleared Device Owner cleanly (" + keptGone
+                + " bloat packages kept permanently uninstalled; personal data intact).";
         }
         if ("WORK_PROFILE".equals(role) || "COPE_WORK_PROFILE".equals(role)) {
             dpm.wipeData(0);

@@ -52,5 +52,13 @@ ARGS=("--host" "$AREOLE_MDM_HOST" "--port" "$AREOLE_MDM_PORT" "--no-banner")
 if [ "${ENABLE_TUNNEL:-1}" = "1" ]; then
     ARGS+=("--tunnel")
 fi
+# Public multi-user mode: session cookies + token-bound devices + auto-deprovision
+# on session expiry; ADB controls disabled. Put the site behind your own HTTPS
+# reverse proxy and set AREOLE_PUBLIC_BASE_URL (server.py also reads
+# AREOLE_SESSION_TTL / AREOLE_RETIRE_GRACE directly from the environment).
+if [ "${ENABLE_PUBLIC:-0}" = "1" ]; then
+    ARGS+=("--public")
+    echo "[*] Public multi-user mode enabled (put this behind an HTTPS reverse proxy!)"
+fi
 
 exec python3 -u /app/server.py "${ARGS[@]}" "$@"

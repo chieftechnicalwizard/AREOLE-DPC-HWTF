@@ -72,7 +72,7 @@
 <nav>
   <button class="active" onclick="showTab('enroll', this)">1. 6-Tap QR Enrollment</button>
   <button onclick="showTab('devices', this)">2. Enrolled Devices &amp; App Drawer</button>
-  <button onclick="showTab('adb', this)">3. USB / Wireless ADB Control</button>
+  <button id="nav-adb" onclick="showTab('adb', this)">3. USB / Wireless ADB Control</button>
 </nav>
 <main>
   <section id="tab-enroll">
@@ -151,6 +151,8 @@
           </label>
         </div>
 
+        <div class="note hidden" id="publicNote"></div>
+
         <div class="note">
           <b>Why Device Owner + Non-Destructive Clear?</b><br/>
           &bull; Choosing <b>First-Boot 6-Tap Device Owner</b> gives <code>AreoleDPC</code> system-wide ability to hide carrier/OEM junk via <code>setApplicationHidden()</code> and silence default spam notifications, while immediately clearing all <code>UserManager</code> restrictions so you stay in full control.<br/>
@@ -162,7 +164,7 @@
         <div class="btn-row">
           <button class="btn" onclick="copyJson()">Copy QR JSON</button>
           <a class="btn ghost" href="/apk/areole-dpc.apk" style="text-decoration:none;">Download areole-dpc.apk</a>
-          <button class="btn teal" onclick="refreshQR()">Regenerate Token &amp; QR</button>
+          <button class="btn teal" onclick="refreshQR(true)">Regenerate Token &amp; QR</button>
         </div>
       </div>
 
@@ -261,38 +263,68 @@ function showTab(name, btn) {
   btn.classList.add("active");
   if (name === "devices") loadStatus();
   if (name === "adb") loadAdb();
+  // Coming back to enrollment: pick up a fresh token if the previous one was
+  // just consumed by an enrolled device (public mode re-serves it otherwise).
+  if (name === "enroll") loadStatus();
 }
 
 async function loadStatus() {
   const r = await fetch("/api/status");
   statusData = await r.json();
+  const pub = statusData.mode === "public";
+
+  // Public mode: hide host-bound ADB controls (they drive the server's own adb daemon).
+  document.getElementById("nav-adb").classList.toggle("hidden", pub);
+  if (pub) document.getElementById("tab-adb").classList.add("hidden");
+
   const sel = document.getElementById("server_url");
   const prev = sel.value;
   sel.innerHTML = "";
-  const ips = statusData.lan_ips || [];
-  if (!ips.length) ips.push({iface:"lo", ip:"127.0.0.1"});
-
-  // Prioritize valid HTTPS tunnel when available because Android 14-16+ Setup Wizard rejects plain HTTP.
-  if (statusData.https_tunnel_url) {
-    const o = document.createElement("option");
-    o.value = statusData.https_tunnel_url;
-    o.textContent = `${statusData.https_tunnel_url} (HTTPS Tunnel — 6-Tap QR)`;
-    sel.appendChild(o);
-  }
-  ips.forEach(x => {
-    const u = `http://${x.ip}:${statusData.port}`;
+  if (pub) {
+    // One canonical public origin; the server overrides any client-supplied URL anyway.
+    const u = statusData.public_base_url || location.origin;
     const o = document.createElement("option");
     o.value = u;
-    o.textContent = `${u} (${x.iface})`;
+    o.textContent = `${u} (This Service — HTTPS 6-Tap QR)`;
     sel.appendChild(o);
-  });
+  } else {
+    const ips = statusData.lan_ips || [];
+    if (!ips.length) ips.push({iface:"lo", ip:"127.0.0.1"});
+
+    // Prioritize valid HTTPS tunnel when available because Android 14-16+ Setup Wizard rejects plain HTTP.
+    if (statusData.https_tunnel_url) {
+      const o = document.createElement("option");
+      o.value = statusData.https_tunnel_url;
+      o.textContent = `${statusData.https_tunnel_url} (HTTPS Tunnel — 6-Tap QR)`;
+      sel.appendChild(o);
+    }
+    ips.forEach(x => {
+      const u = `http://${x.ip}:${statusData.port}`;
+      const o = document.createElement("option");
+      o.value = u;
+      o.textContent = `${u} (${x.iface})`;
+      sel.appendChild(o);
+    });
+  }
   if (prev && Array.from(sel.options).some(o => o.value === prev)) sel.value = prev;
   document.getElementById("setupLink").textContent = sel.value + "/setup";
-  const tlsTag = statusData.https_tunnel_url ? ` | HTTPS: ${statusData.https_tunnel_url}` : " | Start with --tunnel for HTTPS 6-Tap QR";
+
+  const hrs = statusData.session ? Math.max(0, Math.round((statusData.session.expires_at - Date.now()/1000) / 3600)) : 0;
+  const modeTag = pub
+    ? ` | Public session · expires in ~${hrs}h (management auto-removes after that)`
+    : (statusData.https_tunnel_url ? ` | HTTPS: ${statusData.https_tunnel_url}` : " | Start with --tunnel for HTTPS 6-Tap QR");
   document.getElementById("apkBadge").textContent =
     (statusData.apk.apk_exists
       ? `APK ready (${(statusData.apk.apk_bytes/1024).toFixed(1)} KB) | Cert: ${statusData.apk.signature_checksum.slice(0,14)}...`
-      : "APK missing — run ./build_dpc.sh") + tlsTag;
+      : "APK missing — run ./build_dpc.sh") + modeTag;
+
+  const note = document.getElementById("publicNote");
+  if (pub) {
+    note.classList.remove("hidden");
+    note.innerHTML = `<b>Public session — zero lock-in.</b> Devices enrolled from this browser appear here and nowhere else: no other visitor can see or control them. When this session expires (~${hrs}h), management removes itself from your phone (<code>DEPROVISION_KEEP_PERSONAL</code>) and every stored record is purged — no accounts, nothing retained. You can also tap <b>Deprovision &amp; Remove Controller</b> inside the AreoleDPC app on the phone anytime; it works fully offline. Phones pick up queued actions whenever the app is open, after a reboot, or via the built-in background sync (~15 min).<br/><br/><b>Carrier-device note:</b> on some GMS builds (e.g. Moto G / Tracfone, Android 14+), the setup wizard may crash-loop at <i>"Registering device" / "Checking for updates"</i> after scanning. That is a Google Setup Wizard bug — its Android Device Policy app hijacks the finalization of third-party DPCs. <b>Your provisioning still succeeds</b>: press <b>Back/Close</b> to exit to the launcher. The phone is enrolled, the debloat has applied, and everything in this dashboard works. (See the README's troubleshooting section for the optional adb cleanup.)`;
+  } else {
+    note.classList.add("hidden");
+  }
 
   const tb = document.getElementById("devicesBody");
   tb.innerHTML = "";
@@ -455,7 +487,7 @@ async function applySelectedApps(action) {
   alert(`Queued ${action} for ${pkgs.length} packages on ${drawerDeviceId}.`);
 }
 
-async function refreshQR() {
+async function refreshQR(regen) {
   const srv = document.getElementById("server_url").value;
   document.getElementById("setupLink").textContent = srv + "/setup";
   const body = {
@@ -474,8 +506,16 @@ async function refreshQR() {
     skip_encryption: document.getElementById("skip_encryption").checked,
     leave_system_apps: document.getElementById("leave_system_apps").checked,
   };
+  // Only the explicit Regenerate button rotates the enrollment token (public
+  // mode); ordinary field edits re-render the same session token.
+  if (regen) body.regenerate = true;
   const r = await fetch("/api/qr", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
   const j = await r.json();
+  if (!r.ok || !j.payload) {
+    document.getElementById("payload_json").value = "";
+    document.getElementById("qrSvg").innerHTML = "QR unavailable: " + (j.error || ("HTTP " + r.status));
+    return;
+  }
   document.getElementById("payload_json").value = JSON.stringify(j.payload, null, 2);
   document.getElementById("qrSvg").innerHTML = j.svg || "QR generation failed";
 }
