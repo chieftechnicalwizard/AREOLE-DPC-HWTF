@@ -1,22 +1,18 @@
 # ==============================================================================
-# Dockerfile — Self-Hosted Container Image for AREOLE-DPC-HWTF (v1.0.2)
+# Dockerfile — Self-Hosted Container Image for AREOLE-DPC-HWTF (v1.0.3)
 # ==============================================================================
-# v1.0.2 Security Hardening & Android 16 Setup Wizard Fix Notes:
-#   - Fixed Android 16 Motorola Setup Wizard crash-loop during 6-tap QR enrollment:
-#     * Removed com.motorola.setup (/system_ext/priv-app/SetupWizardExt) from
-#       MOTO_BLOAT_PACKAGES and added a user_setup_complete==0 OOBE guard so
-#       WizardManagerActivity never hits a null WizardScript NPE.
-#   - Security & reliability hardening (Issue #3):
-#     * Eliminated stored XSS / inline onclick interpolation in static/index.html.
-#     * Cached compute_apk_metadata() by (path, mtime_ns, size), added security
-#       headers + JSON/Origin CSRF checks, shlex.quote ADB args, and check-in
-#       field sanitization in server.py.
-#     * Added streaming on-device SHA-256 verification for Thingino v0.6.0,
-#       synchronized ensureDeviceId() with commit(), CORE_HIDE_EXEMPT guard,
-#       and Android 16 edge-to-edge inset padding in MainActivity.
-#   - When upgrading an existing persistent volume from v1.0.0/v1.0.1, run once
-#     with REBUILD_APK=1 (or `docker exec areole-dpc-hwtf /app/build_dpc.sh`) to
-#     recompile areole-dpc.apk (v1.0.2) under your existing signing keystore.
+# v1.0.3 Display Defaults & Android 16 Background Thingino Installer:
+#   - Default 5-minute screen timeout (300,000 ms) and Night Light enabled by
+#     default on Device Owner provisions (plus one-tap Display Defaults button).
+#   - Added ThinginoInstallJobService (JobScheduler) triggered from
+#     PolicyComplianceActivity & remote commands so Android 12-16 reliably
+#     downloads, SHA-256-verifies, and installs Thingino v0.6.0 even after
+#     Setup Wizard finishes or the screen dims.
+#   - Removed the non-settable Device PIN Hint field from the QR UI to avoid
+#     confusion (Android 8-16 prohibits silent first-PIN injection).
+#   - When upgrading an existing persistent volume, run once with REBUILD_APK=1
+#     (or `docker exec areole-dpc-hwtf /app/build_dpc.sh`) to recompile
+#     areole-dpc.apk (v1.0.3) under your existing signing keystore.
 #
 # Teaching Design Goals:
 #   1. Immutable code + zero baked secrets:
@@ -35,7 +31,7 @@
 FROM ubuntu:24.04
 
 LABEL org.opencontainers.image.title="AREOLE-DPC-HWTF" \
-      org.opencontainers.image.version="1.0.2" \
+      org.opencontainers.image.version="1.0.3" \
       org.opencontainers.image.source="https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF" \
       org.opencontainers.image.url="https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF" \
       org.opencontainers.image.licenses="Apache-2.0" \

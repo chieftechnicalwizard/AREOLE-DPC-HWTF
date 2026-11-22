@@ -103,26 +103,23 @@
         </div>
         <div class="row">
           <div>
-            <label>Device PIN Hint (Optional Prompt Reminder)</label>
-            <input id="pin_hint" value="1111" oninput="refreshQR()" />
-          </div>
-          <div>
             <label>Wi-Fi Security (Optional Auto-Join)</label>
             <select id="wifi_security" onchange="refreshQR()">
               <option value="WPA">WPA / WPA2 / WPA3</option>
               <option value="NONE">Open</option>
             </select>
           </div>
-        </div>
-        <div class="row">
           <div>
             <label>Wi-Fi SSID (Optional — skips typing Wi-Fi during Welcome setup)</label>
             <input id="wifi_ssid" placeholder="e.g. MyHomeWiFi" oninput="refreshQR()" />
           </div>
+        </div>
+        <div class="row">
           <div>
             <label>Wi-Fi Password</label>
             <input id="wifi_password" type="password" placeholder="Optional Wi-Fi password" oninput="refreshQR()" />
           </div>
+          <div></div>
         </div>
         <div class="btn-row">
           <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);">
@@ -130,6 +127,12 @@
           </label>
           <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);">
             <input type="checkbox" id="notifications_off" checked style="width:auto" onchange="refreshQR()" /> Notifications Off by Default
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);">
+            <input type="checkbox" id="night_light_default" checked style="width:auto" onchange="refreshQR()" /> Enable Night Light by Default
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);">
+            <input type="checkbox" id="screen_timeout_5m" checked style="width:auto" onchange="refreshQR()" /> Screen Timeout: 5m (+ Stay Awake Plugged In)
           </label>
           <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);">
             <input type="checkbox" id="install_thingino" style="width:auto" onchange="refreshQR()" /> Optional: Install Thingino App (v0.6.0)
@@ -454,7 +457,8 @@ async function refreshQR() {
     preferred_mode: document.getElementById("preferred_mode").value,
     server_url: srv,
     username: document.getElementById("username").value,
-    pin_hint: document.getElementById("pin_hint").value,
+    night_light_default: document.getElementById("night_light_default").checked,
+    screen_timeout_5m: document.getElementById("screen_timeout_5m").checked,
     wifi_ssid: document.getElementById("wifi_ssid").value,
     wifi_password: document.getElementById("wifi_password").value,
     wifi_security: document.getElementById("wifi_security").value,

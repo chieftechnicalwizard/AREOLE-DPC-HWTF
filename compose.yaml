@@ -1,15 +1,15 @@
 # ==============================================================================
-# compose.yaml — Local Container Stack for AREOLE-DPC-HWTF (v1.0.2)
+# compose.yaml — Local Container Stack for AREOLE-DPC-HWTF (v1.0.3)
 #
 # Quick Start:
 #   docker compose up -d --build
 #   docker compose logs -f
 #
-# Upgrading an existing v1.0.0 / v1.0.1 volume to v1.0.2:
+# Upgrading an existing persistent volume to v1.0.3:
 #   docker compose up -d --build
 #   docker exec areole-dpc-hwtf /app/build_dpc.sh   # refreshes APK under same key
-#   (Includes Android 16 Motorola Setup Wizard crash fix, Web UI XSS/CSRF &
-#    ADB hardening, APK metadata caching, and on-device Thingino SHA-256 check.
+#   (Includes 5-minute screen timeout & Night Light defaults, Android 16
+#    JobScheduler Thingino installer, and Setup Wizard / security hardening.
 #    Set INSTALL_THINGINO: "1" below to pre-cache the 25 MB Thingino APK at
 #    container startup instead of on-demand during 6-tap setup.)
 #

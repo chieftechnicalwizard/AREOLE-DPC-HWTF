@@ -17,8 +17,8 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.areole.dpc"
-    android:versionCode="3"
-    android:versionName="1.0.2">
+    android:versionCode="4"
+    android:versionName="1.0.3">
 
     <!-- minSdk 26 covers Android 8.0+; targetSdk 35 aligns with Android 15/16 -->
     <uses-sdk
@@ -50,6 +50,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Background JobService for SHA-256-verified Thingino v0.6.0 installation -->
+        <service
+            android:name=".ThinginoInstallJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!-- Step 1 of Android 10-16 Setup Wizard handshake: pick Device Owner or Work Profile -->
         <activity

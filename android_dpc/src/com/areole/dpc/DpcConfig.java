@@ -57,6 +57,8 @@ public final class DpcConfig {
     public static final String KEY_SERVER_URL = "server_url";
     public static final String KEY_TOKEN = "token";
     public static final String KEY_USERNAME = "username";
+    public static final String KEY_NIGHT_LIGHT = "night_light_default";
+    public static final String KEY_SCREEN_TIMEOUT_5M = "screen_timeout_5m";
     public static final String KEY_DEVICE_ID = "device_id";
     public static final String KEY_STRIP_BLOAT = "strip_bloatware";
     public static final String KEY_NOTIF_OFF = "notifications_off_default";
@@ -218,6 +220,12 @@ public final class DpcConfig {
         if (extras.containsKey("username")) {
             ed.putString(KEY_USERNAME, extras.getString("username", "Owner"));
         }
+        if (extras.containsKey("night_light_default")) {
+            ed.putBoolean(KEY_NIGHT_LIGHT, extras.getBoolean("night_light_default", true));
+        }
+        if (extras.containsKey("screen_timeout_5m")) {
+            ed.putBoolean(KEY_SCREEN_TIMEOUT_5M, extras.getBoolean("screen_timeout_5m", true));
+        }
         if (extras.containsKey("strip_bloatware")) {
             ed.putBoolean(KEY_STRIP_BLOAT, extras.getBoolean("strip_bloatware", true));
         }
@@ -373,6 +381,52 @@ public final class DpcConfig {
         if (prefs(ctx).getBoolean(KEY_NOTIF_OFF, false)) {
             muteNotificationsByDefault(ctx);
         }
+    }
+
+    /**
+     * Applies owner-preferred display defaults on Device Owner provisions:
+     *   - Screen timeout -> 5 minutes (300,000 ms) via DPM setSystemSetting (API 28+)
+     *   - Night Light -> enabled via DPM setSecureSetting("night_display_activated", "1")
+     *     (applied where permitted by OEM/Android policy; degrades safely otherwise).
+     */
+    public static String applyDisplayDefaults(Context ctx) {
+        DevicePolicyManager dpm = (DevicePolicyManager) ctx.getSystemService(Context.DEVICE_POLICY_SERVICE);
+        if (dpm == null) return "DPM unavailable";
+        String role = managementRole(ctx);
+        if (!"DEVICE_OWNER".equals(role)) return "Display defaults require Device Owner";
+        ComponentName admin = adminComponent(ctx);
+        StringBuilder sb = new StringBuilder();
+
+        if (prefs(ctx).getBoolean(KEY_SCREEN_TIMEOUT_5M, true)) {
+            boolean ok = false;
+            boolean stayAwake = false;
+            try {
+                if (Build.VERSION.SDK_INT >= 28) {
+                    dpm.setSystemSetting(admin, Settings.System.SCREEN_OFF_TIMEOUT, "300000");
+                    ok = true;
+                }
+            } catch (Throwable ignored) {}
+            try {
+                // 7 = AC (1) | USB (2) | Wireless (4): stay awake while plugged in
+                dpm.setGlobalSetting(admin, Settings.Global.STAY_ON_WHILE_PLUGGED_IN, "7");
+                stayAwake = true;
+            } catch (Throwable ignored) {}
+            sb.append(ok ? "Timeout=5m" : "Timeout=unsupported");
+            if (stayAwake) sb.append("+StayAwake");
+        }
+
+        if (prefs(ctx).getBoolean(KEY_NIGHT_LIGHT, true)) {
+            if (sb.length() > 0) sb.append(", ");
+            String nl;
+            try {
+                dpm.setSecureSetting(admin, "night_display_activated", "1");
+                nl = "NightLight=ON";
+            } catch (Throwable t) {
+                nl = "NightLight=" + t.getClass().getSimpleName();
+            }
+            sb.append(nl);
+        }
+        return sb.length() > 0 ? sb.toString() : "Display defaults disabled";
     }
 
     /**
@@ -604,7 +658,10 @@ public final class DpcConfig {
                         int m = muteNotificationsByDefault(ctx);
                         actionNote = "Muted notifications for " + m + " apps";
                     } else if ("INSTALL_THINGINO".equals(action)) {
-                        actionNote = installThinginoApk(ctx);
+                        ThinginoInstallJobService.schedule(ctx.getApplicationContext());
+                        actionNote = "Scheduled Thingino v0.6.0 install job";
+                    } else if ("APPLY_DISPLAY_DEFAULTS".equals(action)) {
+                        actionNote = applyDisplayDefaults(ctx);
                     }
                 }
             }

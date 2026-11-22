@@ -123,14 +123,20 @@ public class MainActivity extends Activity {
             if (launch != null) {
                 startActivity(launch);
             } else {
-                Toast.makeText(this, "Downloading & installing Thingino v0.6.0...", Toast.LENGTH_SHORT).show();
-                new Thread(() -> {
-                    String msg = DpcConfig.installThinginoApk(getApplicationContext());
-                    mainHandler.post(() -> {
-                        refreshStatus();
-                        Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
-                    });
-                }).start();
+                ThinginoInstallJobService.schedule(getApplicationContext());
+                Toast.makeText(this, "Scheduled background Thingino v0.6.0 install (SHA-256 verified)...", Toast.LENGTH_LONG).show();
+            }
+        }));
+
+        root.addView(makeBtn("Display Defaults (5m Timeout / Stay Awake / Night Light)", "#0F766E", v -> {
+            String res = DpcConfig.applyDisplayDefaults(this);
+            DpcConfig.prefs(this).edit().putString(DpcConfig.KEY_LAST_SYNC, res).apply();
+            refreshStatus();
+            Toast.makeText(this, res, Toast.LENGTH_LONG).show();
+            if (res.contains("SecurityException")) {
+                try {
+                    startActivity(new Intent("android.settings.NIGHT_DISPLAY_SETTINGS"));
+                } catch (Throwable ignored) {}
             }
         }));
 
@@ -144,8 +150,12 @@ public class MainActivity extends Activity {
 
         root.addView(makeBtn("Open Security / Set Screen PIN", "#475569", v -> {
             try {
-                startActivity(new Intent(Settings.ACTION_SECURITY_SETTINGS));
-            } catch (Throwable ignored) {}
+                startActivity(new Intent(DevicePolicyManager.ACTION_SET_NEW_PASSWORD));
+            } catch (Throwable ignored) {
+                try {
+                    startActivity(new Intent(Settings.ACTION_SECURITY_SETTINGS));
+                } catch (Throwable ignored2) {}
+            }
         }));
 
         // Calls clearDeviceOwnerApp() on Device Owner or wipeData(0) inside Work Profile only
@@ -231,7 +241,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         if (poller != null) {
-            poller.shutdownNow();
+            poller.shutdown();
             poller = null;
         }
     }

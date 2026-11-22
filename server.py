@@ -499,6 +499,8 @@ def build_qr_payload(params: dict[str, Any], apk_meta: dict[str, Any]) -> dict[s
     preferred_mode = (params.get("preferred_mode") or "device_owner").strip()
     strip_bloat = bool(params.get("strip_bloatware", True))
     notif_off = bool(params.get("notifications_off", True))
+    night_light = bool(params.get("night_light_default", True))
+    screen_timeout_5m = bool(params.get("screen_timeout_5m", True))
     install_thingino = bool(params.get("install_thingino", False))
     skip_enc = bool(params.get("skip_encryption", True))
     leave_sys = bool(params.get("leave_system_apps", True))
@@ -537,7 +539,8 @@ def build_qr_payload(params: dict[str, Any], apk_meta: dict[str, Any]) -> dict[s
                 "server_url": host,
                 "enrollment_token": token,
                 "username": username,
-                "pin_hint": pin_hint,
+                "night_light_default": night_light,
+                "screen_timeout_5m": screen_timeout_5m,
                 "preferred_mode": preferred_mode,
                 "strip_bloatware": strip_bloat,
                 "notifications_off_default": notif_off,
@@ -966,6 +969,9 @@ a.sec{background:#0284c7;color:#fff}</style></head><body>
                     ["shell", "settings", "put", "global", "adb_enabled", "1"],
                     ["shell", "settings", "put", "global", "development_settings_enabled", "1"],
                     ["shell", "settings", "put", "global", "device_name", shlex.quote(username)],
+                    ["shell", "settings", "put", "system", "screen_off_timeout", "300000"],
+                    ["shell", "settings", "put", "global", "stay_on_while_plugged_in", "7"],
+                    ["shell", "settings", "put", "secure", "night_display_activated", "1"],
                 ):
                     rc, o, e = run_adb(cmd, serial)
                     logs.append(f"{' '.join(cmd)} -> rc={rc} {o} {e}")
