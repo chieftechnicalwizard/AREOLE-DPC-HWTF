@@ -188,6 +188,8 @@ docker run -d --name areole-dpc \
 
    *(Real hardware capture on a factory-reset Moto G Power 2026 / Android 16 — `DEVICE_OWNER` bound with `0` restrictions, `39` bloat packages hidden on first boot, and zero Setup Wizard crashes.)*
 
+   > **Friendly Reminder on Screen 1 (*"This device isn't private"*):** Android always displays that standard enterprise disclaimer during Device Owner setup. **In this case, YOU are the organization and the IT admin** — your phone is being enrolled exclusively into your own self-hosted, privately signed `AreoleDPC` controller with zero cloud accounts or third-party oversight. All `UserManager` restrictions are cleared immediately, and you can tap **Deprovision & Remove Controller (Keep Personal)** anytime to remove management without wiping your personal data.
+
 4. **Already Set Up Without Factory Resetting? (ADB & BYOD Modes)**
    - Visit `<server_url>/setup` on your phone browser to install `areole-dpc.apk` and create a removable **Work Profile**, OR plug in USB / pair **Wireless Debugging** in Tab 3 (`USB / Wireless ADB Control`) to run one-click user-0 debloating, notification muting, or optional Thingino installation without resetting at all.
 
