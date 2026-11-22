@@ -36,9 +36,15 @@
     @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
     .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:18px; }
     .card h2 { margin:0 0 14px; font-size:16px; color:#f8fafc; }
-    .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; align-items:end; }
+    .row-3 { display:grid; grid-template-columns:0.95fr 1.1fr 1.35fr; gap:12px; margin-bottom:12px; align-items:end; }
+    @media (max-width: 720px) { .row, .row-3 { grid-template-columns:1fr; } }
     label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
     input, select, textarea { width:100%; background:#0b1220; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:9px 11px; font-size:13px; }
+    .pw-wrap { position:relative; display:flex; align-items:center; }
+    .pw-wrap input { padding-right:58px; }
+    .pw-toggle { position:absolute; right:6px; background:#1e293b; color:var(--muted); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:11px; font-weight:600; cursor:pointer; }
+    .pw-toggle:hover { color:#fff; border-color:var(--blue); }
     textarea { font-family: ui-monospace, monospace; min-height:150px; }
     .btn { background:var(--blue); color:#fff; border:0; border-radius:8px; padding:9px 14px; font-weight:600; cursor:pointer; font-size:13px; }
     .btn.teal { background:var(--teal); color:#042f2e; }
@@ -101,25 +107,25 @@
             <input id="username" value="Owner" oninput="refreshQR()" />
           </div>
         </div>
-        <div class="row">
+        <div class="row-3">
           <div>
-            <label>Wi-Fi Security (Optional Auto-Join)</label>
+            <label>Wi-Fi Security (Optional)</label>
             <select id="wifi_security" onchange="refreshQR()">
               <option value="WPA">WPA / WPA2 / WPA3</option>
               <option value="NONE">Open</option>
             </select>
           </div>
           <div>
-            <label>Wi-Fi SSID (Optional — skips typing Wi-Fi during Welcome setup)</label>
+            <label>Wi-Fi SSID (Optional Auto-Join)</label>
             <input id="wifi_ssid" placeholder="e.g. MyHomeWiFi" oninput="refreshQR()" />
           </div>
-        </div>
-        <div class="row">
           <div>
             <label>Wi-Fi Password</label>
-            <input id="wifi_password" type="password" placeholder="Optional Wi-Fi password" oninput="refreshQR()" />
+            <div class="pw-wrap">
+              <input id="wifi_password" type="password" placeholder="Optional Wi-Fi password" oninput="refreshQR()" />
+              <button type="button" class="pw-toggle" id="wifiPwToggle" onclick="toggleWifiPassword()" aria-label="Show Wi-Fi password">Show</button>
+            </div>
           </div>
-          <div></div>
         </div>
         <div class="btn-row">
           <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text);">
@@ -582,6 +588,15 @@ async function adbAction(action) {
   const j = await r.json();
   document.getElementById("adbLogs").textContent = (j.logs || []).join("\n");
   loadAdb();
+}
+
+function toggleWifiPassword() {
+  const inp = document.getElementById("wifi_password");
+  const btn = document.getElementById("wifiPwToggle");
+  const showing = inp.type === "text";
+  inp.type = showing ? "password" : "text";
+  btn.textContent = showing ? "Show" : "Hide";
+  btn.setAttribute("aria-label", showing ? "Show Wi-Fi password" : "Hide Wi-Fi password");
 }
 
 function copyJson() {

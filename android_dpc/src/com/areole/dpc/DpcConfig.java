@@ -14,6 +14,7 @@ import android.content.pm.ResolveInfo;
 import android.os.Build;
 import android.os.PersistableBundle;
 import android.os.Process;
+import android.os.SystemClock;
 import android.os.UserManager;
 import android.provider.Settings;
 import java.io.BufferedReader;
@@ -172,6 +173,8 @@ public final class DpcConfig {
     public static final String THINGINO_APK_SHA256 =
         "bf4e9181d282f595dd40caf0a8d8b26d16f34135ab96e8acc87f89fde96a81af";
     private static final long THINGINO_MAX_BYTES = 64L * 1024L * 1024L;
+    private static final long THINGINO_COMMIT_COOLDOWN_MS = 90_000L;
+    private static volatile long lastThinginoCommitMs = 0L;
 
     /** Critical OS packages that must never be hidden via setPackagesHidden(..., true). */
     public static final Set<String> CORE_HIDE_EXEMPT = new HashSet<>(Arrays.asList(
@@ -240,14 +243,38 @@ public final class DpcConfig {
         ed.apply();
     }
 
+    static boolean isThinginoCommitPending() {
+        long ts = lastThinginoCommitMs;
+        return ts > 0L && (SystemClock.elapsedRealtime() - ts) < THINGINO_COMMIT_COOLDOWN_MS;
+    }
+
     /**
-     * Downloads an optional companion APK (Thingino v0.6.0 hosted by your own server)
-     * and commits it silently via Android's PackageInstaller session API.
-     * Synchronized to prevent concurrent duplicate downloads during provisioning.
+     * Schedules the optional Thingino companion APK install via single-flight JobScheduler
+     * so BroadcastReceiver and Activity provisioning paths never race or abort downloads.
      */
-    public static synchronized String installThinginoApk(Context ctx) {
+    public static String installThinginoApk(Context ctx) {
         if (ctx.getPackageManager().getLaunchIntentForPackage("com.thingino.app") != null) {
             return "Thingino already installed";
+        }
+        if (isThinginoCommitPending()) {
+            return "Thingino install session already committed";
+        }
+        ThinginoInstallJobService.schedule(ctx.getApplicationContext());
+        return "Scheduled Thingino v0.6.0 install job";
+    }
+
+    /**
+     * Downloads the optional companion APK (Thingino v0.6.0 hosted by your own server)
+     * and commits it silently via Android's PackageInstaller session API.
+     * Invoked exclusively by ThinginoInstallJobService; synchronized with a post-commit
+     * cooldown so asynchronous PackageInstaller commits never trigger duplicate downloads.
+     */
+    static synchronized String runThinginoInstallNow(Context ctx) {
+        if (ctx.getPackageManager().getLaunchIntentForPackage("com.thingino.app") != null) {
+            return "Thingino already installed";
+        }
+        if (isThinginoCommitPending()) {
+            return "Thingino install session already committed";
         }
         String serverUrl = prefs(ctx).getString(KEY_SERVER_URL, "");
         if (serverUrl == null || serverUrl.isEmpty()) {
@@ -309,6 +336,7 @@ public final class DpcConfig {
                 PendingIntent pi = PendingIntent.getBroadcast(ctx, 4201, intent, flags);
                 session.commit(pi.getIntentSender());
                 committed = true;
+                lastThinginoCommitMs = SystemClock.elapsedRealtime();
                 return "Committed Thingino APK install session (SHA-256 verified)";
             } catch (Throwable t) {
                 if (!committed) {
