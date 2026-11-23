@@ -1,6 +1,6 @@
 # Android 16 Post-Deprovision & OTA Rebloat Findings
 
-Real-hardware test log documenting package state, OEM silent installers, and OTA persistence across two sequential Android 16 A/B system updates on a retail Motorola **`moto g power - 2026` (`vegas26`, Tracfone/Verizon)** device.
+Real-hardware test log documenting package state, OEM silent installers, and OTA persistence across two sequential Android 16 A/B system updates on a compatible Android-powered retail/carrier phone.
 
 ---
 
@@ -20,9 +20,9 @@ Real-hardware test log documenting package state, OEM silent installers, and OTA
 
 ---
 
-## 2. OEM `non-disable` Framework Protection on Motorola Android 16
+## 2. OEM `non-disable` Framework Protection on Android 16
 
-Four preinstalled packages on Motorola Android 16 (`vegas26`) are framework-protected against unmanaged removal:
+Four preinstalled packages on the tested Android 16 build are framework-protected against unmanaged removal:
 
 | Package | `pm uninstall --user 0` | `pm disable-user --user 0` | Notes |
 | :--- | :--- | :--- | :--- |

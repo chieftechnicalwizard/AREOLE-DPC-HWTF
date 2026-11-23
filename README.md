@@ -92,7 +92,7 @@ Follow these exact steps and explain what each command does as we go:
 ### Prerequisites
 - Linux host (**Debian / Ubuntu / Mint**, **Arch / Omarchy / Manjaro**, **Fedora / RHEL / Rocky / Alma**, **openSUSE**, **Alpine**, **Void**, or **NixOS**) with **Java JDK 17+** (`javac`/`keytool`), **Python 3.10+**, **`unzip`**, **`zip`**, **`curl`**, and **`qrencode`** (optional, for sharp SVG QR codes in the browser).
 - `./setup.sh` auto-detects `apt-get`, `pacman`, `dnf`, `zypper`, `apk`, and `xbps-install` to install missing dependencies automatically (or pass `--skip-deps` if you manage tools yourself).
-- An Android phone (**Android 9–16+** tested; bloat preset tuned specifically around Motorola retail/carrier builds such as Moto G Power 2026 while safe on any Android device).
+- A compatible Android-powered phone (**Android 9–16+** tested; includes a curated retail and carrier bloat preset that is safe across compatible Android devices).
 
 <details>
 <summary>Manual per-distribution dependency install commands (optional)</summary>
@@ -232,13 +232,7 @@ When a session expires (default **48h**; the expected flow is under a day), the 
    - Tap empty background space on that Welcome screen **6 times rapidly** until the QR reader opens.
    - Point the phone at the QR code on your computer monitor.
 3. **Watch the Provisioning Handshake Finish**
-   - Android joins Wi-Fi, downloads `areole-dpc.apk` over HTTPS, verifies the `PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM`, creates Device Owner scope, applies bloat-hiding + notification silence, and walks cleanly through consent → OEM privacy → Google Services straight to the home screen:
-
-| 1. Accept Device Owner | 2. OEM Privacy & Telemetry | 3. Google Services | 4. Enrolled & Debloated (`v1.0.2`) |
-| :---: | :---: | :---: | :---: |
-| ![Accept Device Owner](docs/screenshots/01_accept_device_owner.jpg) | ![Motorola Privacy & Security](docs/screenshots/02_moto_privacy_security.jpg) | ![Google Services](docs/screenshots/03_google_services.jpg) | ![AreoleDPC Enrolled](docs/screenshots/04_areole_dpc_enrolled.png) |
-
-   *(Real hardware capture on a factory-reset Moto G Power 2026 / Android 16 — `DEVICE_OWNER` bound with `0` restrictions, `39` bloat packages hidden on first boot, and zero Setup Wizard crashes.)*
+   - Android joins Wi-Fi, downloads `areole-dpc.apk` over HTTPS, verifies the `PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM`, binds **Device Owner** with `0` restrictions, hides bloatware + applies notification/display defaults, and walks cleanly through **Accept Device Owner → OEM Privacy & Telemetry → Google Services → Home Screen** with zero Setup Wizard crashes.
 
    > **Friendly Reminder on Screen 1 (*"This device isn't private"*):** Android always displays that standard enterprise disclaimer during Device Owner setup. **In this case, YOU are the organization and the IT admin** — your phone is being enrolled exclusively into your own self-hosted, privately signed `AreoleDPC` controller with zero cloud accounts or third-party oversight. All `UserManager` restrictions are cleared immediately, and you can tap **Deprovision & Remove Controller (Keep Personal)** anytime to remove management without wiping your personal data.
 
@@ -247,7 +241,7 @@ When a session expires (default **48h**; the expected flow is under a day), the 
 
 ### Troubleshooting: Setup Wizard crash-loops after scanning the QR
 
-> **Fixed in `v1.0.2+` (`3e59b14`):** On Motorola Android 16 devices (including Moto G Power 2026 / retail & Tracfone builds), older `v1.0.1` APKs triggered an *"Android setup keeps stopping"* loop right after *"Registering device" → "Checking for updates"* because `MOTO_BLOAT_PACKAGES` hid `com.motorola.setup` (`/system_ext/priv-app/SetupWizardExt/SetupWizardExt.apk`), which hosts `res/raw/wizard_script_post_dpm_user_flow_*.xml` for `WizardManagerActivity`. `com.motorola.setup` has been removed from the preset and `DpcConfig.setPackagesHidden()` now refuses to hide setup-wizard packages while `user_setup_complete == 0` (verified **0 crashes** across retail Moto G Power 2026 Android 16 units). If you upgraded an existing Docker volume from `v1.0.1`, start once with `REBUILD_APK=1` so the container recompiles the updated APK.
+> **Fixed in `v1.0.2+` (`3e59b14`):** On certain Android 16 retail and carrier builds, older `v1.0.1` APKs triggered an *"Android setup keeps stopping"* loop right after *"Registering device" → "Checking for updates"* because the bloat preset hid an OEM Setup Wizard extension (`com.motorola.setup` / `SetupWizardExt.apk`) hosting `res/raw/wizard_script_post_dpm_user_flow_*.xml` for `WizardManagerActivity`. That package has been removed from the preset and `DpcConfig.setPackagesHidden()` now refuses to hide setup-wizard packages while `user_setup_complete == 0` (verified **0 crashes** across tested compatible Android 16 devices). If you upgraded an existing Docker volume from `v1.0.1`, start once with `REBUILD_APK=1` so the container recompiles the updated APK.
 
 **Fallback for older APKs or unusual GMS/carrier builds:** If a different OEM/carrier build ever stalls during post-DPM finalization (for example, when Google's **Android Device Policy** `com.google.android.apps.work.clouddpc` intercepts `ROLE_HOLDER_PROVISION_FINALIZATION`), **provisioning itself has already succeeded** — Device Owner is bound, debloat is applied, and the device checks into your console. Press Back/Close to reach the launcher, then run over USB ADB to clear any stuck OOBE state:
 
@@ -317,7 +311,13 @@ Want `AreoleDPC` completely gone after your phone is debloated and tuned?
 2. Under **Device Owner**, `AreoleDPC` does two things before calling `dpm.clearDeviceOwnerApp("com.areole.dpc")`: it clears all `UserManager` restrictions, and it **converts every hidden bloat package into a permanent user-0 uninstall** (`PackageInstaller`, identical in effect to the ADB path's `pm uninstall -k --user 0`). This step exists because Android otherwise *restores* every app an admin hid with `setApplicationHidden()` the moment that admin is removed — silently undoing your debloat. User-0 uninstalls are plain PackageManager state: they survive management removal and reboots, the APKs stay on `/system` (so OS security updates and a factory reset can always restore them), and your personal apps, accounts, and photos are never touched. Management then ends immediately and you can uninstall the DPC app normally afterwards.
 3. Under a **BYOD Work Profile**, it cleanly deletes only the Work container while keeping your main personal profile safe.
 
-> **OTA, Persistence & Anti-Carrier Guide:** On Android 16 retail Motorola builds, clearing Device Owner reverts `setApplicationHidden()` unless packages are uninstalled for user 0 (`pm uninstall --user 0`), and a few OEM stubs (notably `com.motorola.installer` and `com.tracfone.preload.accountservices`) are framework-protected as `non-disable`. See [`docs/OTA_REBLOAT_FINDINGS.md`](docs/OTA_REBLOAT_FINDINGS.md) for the real-hardware OTA timeline and **[Keeping Self-Signed Device Owner Active (Persistence, Reboots & Normal Development Gist)](https://gist.github.com/chieftechnicalwizard/dfeb6546ba0efdd119349f0036feaf46)** for why keeping your persistent self-signed keystore (`~/AREOLE-DPC-HWTF/keystore/`) active is safe across laptop reboots and ideal for everyday development.
+> **OTA, Persistence & Anti-Carrier Guide:** On compatible Android 16 retail and carrier builds, clearing Device Owner reverts `setApplicationHidden()` unless packages are uninstalled for user 0 (`pm uninstall --user 0`), and a few OEM/carrier stubs are framework-protected as `non-disable`. See [`docs/OTA_REBLOAT_FINDINGS.md`](docs/OTA_REBLOAT_FINDINGS.md) for the real-hardware OTA timeline and **[Keeping Self-Signed Device Owner Active (Persistence, Reboots & Normal Development Gist)](https://gist.github.com/chieftechnicalwizard/dfeb6546ba0efdd119349f0036feaf46)** for why keeping your persistent self-signed keystore (`~/AREOLE-DPC-HWTF/keystore/`) active is safe across laptop reboots and ideal for everyday development.
+
+---
+
+## Contributors
+
+- **[@wltechblog](https://github.com/wltechblog)** (Josh at [WLTechBlog](https://www.youtube.com/@wltechblog)) — **[PR #2](https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF/pull/2)**: Public Multi-User Mode (`--public` / `ENABLE_PUBLIC=1`), persistent user-0 debloat across deprovisioning, `AreoleSyncJobService`, the [YouTube walkthrough](https://youtu.be/OOdNzbebSRM), and hosting the live public instance at [dpc.wltechblog.com](https://dpc.wltechblog.com/).
 
 ---
 
