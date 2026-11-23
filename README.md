@@ -234,11 +234,9 @@ When a session expires (default **48h**; the expected flow is under a day), the 
 
 ### Troubleshooting: Setup Wizard crash-loops after scanning the QR
 
-On some GMS carrier builds (observed on a **Moto G Power 2026 / Tracfone, Android 16**), the Play Store auto-installs Google's **Android Device Policy** (`com.google.android.apps.work.clouddpc`) during early setup. Android 14+ then delegates provisioning *finalization* to it as the system's "provisioning role holder" (`ROLE_HOLDER_PROVISION_FINALIZATION`), which mishandles third-party DPCs and leaves Setup Wizard's script null — `WizardManagerActivity` NPE-crash-loops.
+> **Fixed in `v1.0.2+` (`3e59b14`):** On Motorola Android 16 devices (including Moto G Power 2026 / retail & Tracfone builds), older `v1.0.1` APKs triggered an *"Android setup keeps stopping"* loop right after *"Registering device" → "Checking for updates"* because `MOTO_BLOAT_PACKAGES` hid `com.motorola.setup` (`/system_ext/priv-app/SetupWizardExt/SetupWizardExt.apk`), which hosts `res/raw/wizard_script_post_dpm_user_flow_*.xml` for `WizardManagerActivity`. `com.motorola.setup` has been removed from the preset and `DpcConfig.setPackagesHidden()` now refuses to hide setup-wizard packages while `user_setup_complete == 0` (verified **0 crashes** across retail Moto G Power 2026 Android 16 units). If you upgraded an existing Docker volume from `v1.0.1`, start once with `REBUILD_APK=1` so the container recompiles the updated APK.
 
-**How it looks:** after the *"This device isn't private"* consent screen the wizard reaches *"Registering device" → "Checking for updates"*, then "Android setup keeps stopping" in a loop, with Close/Back returning to a QR screen. 
-
-**The provisioning itself still succeeds** at that point: Device Owner binds, the debloat applies, and the phone checks into your console — only the wizard's remaining screens break. Exit to the launcher with Back/Close, then to finish cleanly (USB debugging enabled, or on a prior-exited device):
+**Fallback for older APKs or unusual GMS/carrier builds:** If a different OEM/carrier build ever stalls during post-DPM finalization (for example, when Google's **Android Device Policy** `com.google.android.apps.work.clouddpc` intercepts `ROLE_HOLDER_PROVISION_FINALIZATION`), **provisioning itself has already succeeded** — Device Owner is bound, debloat is applied, and the device checks into your console. Press Back/Close to reach the launcher, then run over USB ADB to clear any stuck OOBE state:
 
 ```bash
 adb shell pm disable-user --user 0 com.google.android.apps.work.clouddpc
@@ -246,7 +244,7 @@ adb shell settings put secure user_setup_complete 1
 adb shell settings put global device_provisioned 1
 ```
 
-Then reboot once to refresh launcher icons. Verify enrollment via the console's **Enrolled Devices** tab (`Role` should read `DEVICE_OWNER`). Carrier-bloat package names vary per firmware — hide any stragglers manually from the **App Inventory drawer**; packages marked "non-disable" by the OEM (e.g. `com.amazon.appmanager` on some builds) cannot be removed by any method short of root.
+Then reboot once to refresh launcher icons and verify `Role: DEVICE_OWNER` in the **Enrolled Devices** tab. Carrier-bloat package names vary per firmware — hide any stragglers manually from the **App Inventory drawer**; packages marked `non-disable` by the OEM (e.g. `com.amazon.appmanager` or `com.motorola.installer` on some builds) cannot be removed without root.
 
 ---
 
