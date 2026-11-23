@@ -17,8 +17,8 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.areole.dpc"
-    android:versionCode="4"
-    android:versionName="1.0.3">
+    android:versionCode="5"
+    android:versionName="1.1.0">
 
     <!-- minSdk 26 covers Android 8.0+; targetSdk 35 aligns with Android 15/16 -->
     <uses-sdk

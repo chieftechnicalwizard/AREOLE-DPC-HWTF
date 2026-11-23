@@ -1,18 +1,22 @@
 # ==============================================================================
-# Dockerfile — Self-Hosted Container Image for AREOLE-DPC-HWTF (v1.0.3)
+# Dockerfile — Self-Hosted Container Image for AREOLE-DPC-HWTF (v1.1.0)
 # ==============================================================================
-# v1.0.3 Display Defaults & Android 16 Background Thingino Installer:
-#   - Default 5-minute screen timeout (300,000 ms) and Night Light enabled by
-#     default on Device Owner provisions (plus one-tap Display Defaults button).
-#   - Added ThinginoInstallJobService (JobScheduler) triggered from
-#     PolicyComplianceActivity & remote commands so Android 12-16 reliably
-#     downloads, SHA-256-verifies, and installs Thingino v0.6.0 even after
-#     Setup Wizard finishes or the screen dims.
-#   - Removed the non-settable Device PIN Hint field from the QR UI to avoid
-#     confusion (Android 8-16 prohibits silent first-PIN injection).
+# v1.1.0 Public Multi-User Mode, Persistent Debloat & Android 16 Hardening:
+#   - Opt-in public multi-user mode (`ENABLE_PUBLIC=1` / `--public`) with
+#     anonymous per-browser sessions, token-bound device isolation, rate limits,
+#     and automatic `DEPROVISION_KEEP_PERSONAL` session-expiry retirement
+#     (`AreoleSyncJobService`) — courtesy of @wltechblog (PR #2).
+#   - Persistent debloat across deprovisioning: `deprovisionKeepPersonal()` now
+#     unhides hidden bloat packages and converts them into permanent user-0
+#     uninstalls before `clearDeviceOwnerApp()` so clean apps survive exit.
+#   - Single-flight `ThinginoInstallJobService` (`JobScheduler`) with pinned
+#     on-device SHA-256 verification and 90s post-commit cooldown.
+#   - Default 5-minute screen timeout (300,000 ms) + Stay Awake while plugged in
+#     and Night Light defaults, Wi-Fi 3-column UI alignment + Show/Hide password
+#     peek, and Motorola Android 16 `com.motorola.setup` OOBE crash fix.
 #   - When upgrading an existing persistent volume, run once with REBUILD_APK=1
 #     (or `docker exec areole-dpc-hwtf /app/build_dpc.sh`) to recompile
-#     areole-dpc.apk (v1.0.3) under your existing signing keystore.
+#     areole-dpc.apk (v1.1.0) under your existing signing keystore.
 #
 # Teaching Design Goals:
 #   1. Immutable code + zero baked secrets:
@@ -29,13 +33,6 @@
 # ==============================================================================
 
 FROM ubuntu:24.04
-
-LABEL org.opencontainers.image.title="AREOLE-DPC-HWTF" \
-      org.opencontainers.image.version="1.0.3" \
-      org.opencontainers.image.source="https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF" \
-      org.opencontainers.image.url="https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF" \
-      org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.description="Self-hosted Android 6-tap QR Device Owner provisioner & debloater"
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH=amd64
@@ -85,6 +82,14 @@ RUN CF_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") \
     && chmod 0755 /usr/local/bin/cloudflared
 
 # 4. Copy application source & create non-root runtime user + writable state dir
+#    (OCI version labels live here so future version bumps reuse the cached SDK layers.)
+LABEL org.opencontainers.image.title="AREOLE-DPC-HWTF" \
+      org.opencontainers.image.version="1.1.0" \
+      org.opencontainers.image.source="https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF" \
+      org.opencontainers.image.url="https://github.com/chieftechnicalwizard/AREOLE-DPC-HWTF" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.description="Self-hosted Android 6-tap QR Device Owner provisioner & debloater"
+
 WORKDIR /app
 COPY android_dpc/ /app/android_dpc/
 COPY static/index.html /app/static/index.html
