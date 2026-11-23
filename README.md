@@ -22,7 +22,10 @@
 
 # AREOLE-DPC-HWTF
 
-<a href="https://www.shekinahshine.org/?donate=paypal"><img src="docs/badges/paypal-donate-pill.svg" alt="Donate via PayPal" height="22" /></a>
+<p>
+  <a href="https://www.shekinahshine.org/?donate=paypal"><img src="docs/badges/paypal-donate-pill.svg" alt="Donate via PayPal" height="22" /></a>
+  <a href="https://dpc.wltechblog.com/"><img src="docs/badges/live-public-dpc-pill.svg" alt="Try Live Public Provisioner (dpc.wltechblog.com)" height="22" align="right" /></a>
+</p>
 
 **Own your phone, silence the adware, and keep zero lock-in.**
 
