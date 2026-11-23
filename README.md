@@ -30,6 +30,16 @@
 
 Scan one QR code on the factory **Welcome** screen (tap empty space **6 times**), let Android enroll your own controller, strip bloatware across the system cleanly, optionally silence non-core app notifications by default, optionally sideload companion tools like **Thingino (`v0.6.0`)**, and whenever you are done, tap **Deprovision & Remove Controller** to drop ownership without wiping a single photo, message, or setting.
 
+### Video Walkthrough (by [WLTechBlog](https://www.youtube.com/@wltechblog))
+
+<p align="center">
+  <a href="https://youtu.be/OOdNzbebSRM">
+    <img src="https://img.youtube.com/vi/OOdNzbebSRM/maxresdefault.jpg" alt="Watch: Bypassing Android Carrier Activation - Turn Discounted Pre-Paid Phones Into Awesome WIFI Tablets! (WLTechBlog)" width="640" />
+  </a>
+  <br />
+  <a href="https://youtu.be/OOdNzbebSRM"><strong>▶ Watch on YouTube: Bypassing Android Carrier Activation — Turn Discounted Pre-Paid Phones Into Awesome WiFi Tablets!</strong></a>
+</p>
+
 ---
 
 ## Why People Use This
